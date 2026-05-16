@@ -1,0 +1,35 @@
+# Framework configuration
+#
+# Capability state and lint visibility for this project.
+# Do not edit by hand — use the /framework skill to make changes.
+
+capabilities:
+  multi_area: false
+  por: false
+  task_subagents: false
+  formal_review: false
+
+lint:
+  # Thresholds (apply regardless of warning visibility)
+  pulse_line_cap: 80
+  stale_concept_threshold_active_days: 30
+  promotion_freshness_active_days: 14
+  spec_abandonment_active_days: 60
+  exchange_stale_active_days: 7
+  cross_area_link_threshold: 3
+  recent_decisions_window_active_days: 7
+
+  # Threshold for suggesting that a shadow rule be enabled
+  shadow_suggest_threshold: 5
+
+  # Which warning rules are visible.
+  # Disabled = run in shadow; trigger counts surface as suggestions.
+  warnings_visible:
+    rule_4_orphans: false
+    rule_8_stale_concept: false
+    rule_9_cross_area_links: false
+    rule_10_promotion_freshness: false
+    rule_11_spec_abandonment: false
+    rule_13_backlinker_freshness: false
+    rule_14_exchange_staleness: false
+    rule_16_cross_area_reads: false

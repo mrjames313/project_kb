@@ -1,0 +1,33 @@
+# Tasks
+
+<Discrete steps to execute the plan. Each task has explicit annotations so subagent execution (when task_subagents is enabled) knows the boundary and dependencies.
+
+Status values: planned | in_progress | done | blocked | superseded>
+
+### T1: <task title>
+
+_Boundary:_ <path; agent writes only within this>
+_Depends:_ <— for none; otherwise list of task IDs>
+_Status:_ planned
+_Owner role:_ <role-name>
+
+<Task description — 1–3 sentences on what this task does and what the completion criterion is.>
+
+#### Implementation Notes
+
+_(Appended by the implementing agent as work proceeds.)_
+
+---
+
+### T2: <task title>
+
+_Boundary:_
+_Depends:_ T1
+_Status:_ planned
+_Owner role:_
+
+...
+
+#### Implementation Notes
+
+_(Appended by the implementing agent as work proceeds.)_
