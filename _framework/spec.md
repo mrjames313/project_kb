@@ -217,6 +217,10 @@ A single skill provides all capability and lint-visibility management.
 
 /framework lint-status              show which lint rules are visible vs shadow,
                                     plus recent shadow trigger counts
+
+/framework prune [role]             analyze role file(s) for stale preload
+                                    entries; surface candidates for removal
+                                    in batched-approval flow
 ```
 
 The skill's behavior on `enable`:
@@ -237,6 +241,20 @@ The skill's behavior on `disable`:
 3. After approval, removes the relevant CLAUDE.md sections, role file entries, and skill conditionals.
 4. Updates `config.yml`.
 5. Re-enabling later picks up the existing files where they were.
+
+The skill's behavior on `prune`:
+
+1. Reads telemetry data for the targeted role(s) — defaults to all roles if no role specified.
+2. For each role, identifies stale preload entries:
+   - **Full-tier**: pages not cited or body-loaded in the last `prune.full_tier_stale_sessions` active sessions (default 10).
+   - **Frontmatter-tier**: patterns whose matched files yielded no body-loads in the last `prune.frontmatter_tier_stale_sessions` active sessions (default 30). Frontmatter is cheaper to load so the threshold is higher.
+   - Pages whose `status` has moved to `superseded`, `dropped`, or `falsified`, regardless of cite history.
+3. Surfaces all candidates in conversation with rationale for each.
+4. Accepts batched user approval (per-candidate Y/N, or "accept all," or "skip all").
+5. Applies approved removals to role files atomically.
+6. Runs `/check` to confirm clean lint state.
+
+Pruning never deletes the underlying kb pages — only their entries in role preload lists.
 
 Capability-specific change lists are described declaratively in `_framework/schema/capabilities.md`. The `framework` skill reads this file and applies the described edits. Adding a new capability later means a new section in `capabilities.md` plus a handler in `framework.py`.
 
@@ -275,6 +293,11 @@ lint:
     rule_13_backlinker_freshness: false
     rule_14_exchange_staleness: false
     rule_16_cross_area_reads: false
+
+prune:
+  # thresholds for /framework prune analysis (in active sessions)
+  full_tier_stale_sessions: 10
+  frontmatter_tier_stale_sessions: 30
 ```
 
 Lint, hooks, and skills read from `config.yml` at runtime. Conditional behavior (e.g., does `/implement` spawn a subagent?) checks the relevant capability flag.
@@ -284,6 +307,8 @@ Lint, hooks, and skills read from `config.yml` at runtime. Conditional behavior 
 ## 4. The schema document (CLAUDE.md)
 
 CLAUDE.md contains operating principles. It's reshaped by `/framework enable` and `/framework disable` to reflect only currently-enabled capabilities. The current capability set is always visible in `_framework/config.yml`; CLAUDE.md reflects state, not options.
+
+Capability-gated sections are inserted from corresponding files in `_framework/schema/claude-snippets/`. The `framework` skill reads the snippet file and splices it into CLAUDE.md at a marker position (between always-on sections, before "Escalation triggers").
 
 Always-present sections:
 
@@ -296,16 +321,17 @@ Always-present sections:
 ## Communicating with the human
 ## When to write where
 ## How to interpret types
-## How to handle concept stages
-## Loading context: frontmatter vs full file
+## Frontmatter discipline
+## Loading context
 ## Links and provenance
 ## Pulse discipline
+## Suggesting preload updates
 ## Spec lifecycle
 ## Skills
 ## Escalation triggers
 ```
 
-Capability-gated sections:
+Capability-gated sections (snippet source in `_framework/schema/claude-snippets/`):
 
 ```
 ## Cross-area reads                    (capability: multi_area)
@@ -314,19 +340,9 @@ Capability-gated sections:
 ## Formal review                       (capability: formal_review)
 ```
 
-When a capability is enabled, the `/framework` skill inserts the appropriate section into CLAUDE.md. When disabled, the section is removed.
+The "Communicating with the human" section is always present and frames conversation as the dominant interaction mode, with INBOX supplementary for asynchronous attention.
 
-The "Communicating with the human" section is always present and reads:
-
-```
-- Conversation is the dominant mode of interaction. Ask questions, surface
-  uncertainties, request approvals, and discuss findings in conversation.
-- INBOX.md is supplementary: it captures items that arose outside a
-  conversation, items the human will see later, and items needing async
-  attention.
-- When the human is in session, default to conversation. Don't file an INBOX
-  item for something you can ask directly.
-```
+The trim from prior iterations: details on concept stages, type-specific handling, and link mechanics now live in `_framework/schema/frontmatter.md` and `_framework/schema/link-conventions.md`. CLAUDE.md references these but doesn't duplicate them. New procedural sections — "Frontmatter discipline," "Suggesting preload updates," "Pulse discipline" (with log format), and an expanded "Spec lifecycle" (with replan rule of thumb) — replace the trimmed content.
 
 ---
 
@@ -334,13 +350,56 @@ The "Communicating with the human" section is always present and reads:
 
 Four types (`source`, `concept`, `finding`, `decision`); status lifecycles per type; type-specific fields; commons-promoted items carry `human_reviewed`, `promoted_from`, `promoted_on`. Source provenance carries `raw_path` pointing into `raw/`. Lint sidecars for backlinks.
 
-See `_framework/schema/frontmatter.md` for the full specification.
+See `_framework/schema/frontmatter.md` for the full specification — including the **frontmatter discipline** section that covers when frontmatter gets written or updated, across all creation paths (`/ingest`, `/ask` synthesis, in-conversation idea capture, `/wrap-up` materialization, `/promote`).
+
+### Preload-update suggestion mechanism
+
+When an agent creates or substantively updates a notable page (high-confidence finding, decision, frequently-cited concept), the agent evaluates whether the page should be in some role's preload list. Criteria:
+
+- Type is `finding` with `confidence: high`, OR
+- Type is `decision` (active), OR
+- Type is `concept` with `status: supported` or actively-cited `under_test`.
+
+If the page qualifies, the agent files an INBOX entry under "Heads up":
+
+> **Preload suggestion**: Consider adding [[<page>]] to `<role-file-path>` (full | frontmatter tier). Reason: <one-line rationale>.
+
+The human reviews and either accepts (agent edits the role file with explicit human confirmation in conversation since role files are human-authored) or declines. Declined suggestions are tracked in `_framework/telemetry/dismissed-suggestions.jsonl` so they're not repeated.
+
+The `/wrap-up` skill scans pages created or updated during the session and files suggestions as a final step before lint.
+
+### Preload pruning
+
+The complementary mechanism. Where the suggestion mechanism handles **additions** (proactively, per-page during work), pruning handles **removals** (cross-session analysis, run on demand).
+
+Pruning identifies candidates from three sources:
+
+- **Stale full-tier entries** — pages in a role's full preload not cited or body-loaded in the last `prune.full_tier_stale_sessions` active sessions (default 10).
+- **Stale frontmatter-tier patterns** — patterns whose matched files yielded no body-loads in the last `prune.frontmatter_tier_stale_sessions` active sessions (default 30). Frontmatter is cheaper, so the threshold is higher.
+- **Lifecycle-driven removals** — pages whose `status` has moved to `superseded`, `dropped`, or `falsified`, regardless of cite history.
+
+Three paths to act on candidates:
+
+- **Passive surfacing** — `/budget` includes a "Recommended prunes" section in its routine report.
+- **Explicit analysis** — `/framework prune [role]` runs the full analysis, surfaces candidates with rationale, and accepts batched approval (per-candidate Y/N, "accept all," or "skip all"). When the user runs prune explicitly, they want a contained back-and-forth.
+- **Reactive cleanup** — when a kb page's status transitions to `superseded`/`dropped`/`falsified`, the framework files an INBOX "Heads up" pointing to any role files that reference it.
+
+Pruning never deletes the underlying kb pages — only their entries in role preload lists. Restoring an entry later is a normal role-file edit.
+
+The telemetry data that makes pruning possible — citation tracking and body-load tracking per session — is captured by `_framework/tools/telemetry.py`; see section 18.
 
 ---
 
 ## 6. Role files
 
-Role files are reshaped by `/framework enable` and `/framework disable` to reflect enabled capabilities. The general shape:
+Role files are reshaped by `/framework enable` and `/framework disable` to reflect enabled capabilities. They use a **two-tier preload** structure:
+
+- **Full preload** — small, curated; bodies are loaded into the agent's context.
+- **Frontmatter preload** — broad; only frontmatter blocks from matching files are loaded. Specified as directory patterns.
+
+The agent's session-start context is "full preload bodies + frontmatter blocks from files matching the frontmatter preload patterns." Bodies of other pages get loaded on demand when material to the work at hand.
+
+The general shape:
 
 ```markdown
 ---
@@ -352,7 +411,7 @@ summary: Investigates optical-domain questions; designs and runs experiments;
 
 # Optics Researcher
 
-## Preload context (explicit; do not infer additional)
+## Preload context (full)
 
 Schema and conventions:
 1. /CLAUDE.md
@@ -361,26 +420,35 @@ Schema and conventions:
 
 Project and parent area:
 4. /commons/brief.md
-5. /commons/POR.md                              # only if capability: por
-6. /commons/pulse.md
+5. /commons/pulse.md
+6. /commons/POR.md                              # only if capability: por
 7. /areas/research/brief.md
-8. /areas/research/POR.md                       # only if capability: por
-9. /areas/research/pulse.md
+8. /areas/research/pulse.md
+9. /areas/research/POR.md                       # only if capability: por
 
 Own area:
 10. /areas/research/optics/brief.md
-11. /areas/research/optics/POR.md               # only if capability: por
-12. /areas/research/optics/pulse.md
+11. /areas/research/optics/pulse.md
+12. /areas/research/optics/POR.md               # only if capability: por
 13. /areas/research/optics/kb/index.md
+
+## Preload context (frontmatter only)
+
+Patterns — frontmatter blocks of all pages under these paths:
+- /commons/kb/findings/
+- /commons/kb/decisions/
+- /areas/research/optics/kb/
+
+Optional individual additions:
+- /areas/research/kb/findings/   # parent-area findings
 
 ## Operating boundaries
 
 - Writes allowed: /areas/research/optics/** EXCEPT /areas/research/optics/raw/**.
-- Raw materials anywhere are read-only; treat as immutable.
-- Reads allowed: full repo, but prefer /exchange (when available) over deep
-  reads into other areas' kb bodies.
+- Raw materials anywhere are read-only; existing files immutable. New raw materials added through /ingest.
 - Writes to /commons/: forbidden; use /propose-promotion.
-- Writes to other areas: forbidden; use /exchange (when available).
+- Writes to other areas: forbidden.
+- Reads allowed: full repo, but prefer /exchange (when available) over deep reads into other areas' kb bodies.
 
 ## Allowed skills
 
@@ -392,13 +460,20 @@ Own area:
 - When citing a concept, surface its status.
 - When ending a session, run /wrap-up before clearing.
 - When a task's plan looks wrong, invoke /replan; do not improvise.
-- Ask the human in conversation when uncertain. INBOX is for items the
-  human will see later, not a substitute for asking now.
+- When you create or substantively update a notable page, file an INBOX "Heads up" preload suggestion if appropriate.
+- Ask the human in conversation when uncertain. INBOX is for items the human will see later, not a substitute for asking now.
 ```
 
-A **reviewer role** is a stripped-down variant of the implementer role. Reviewer roles only exist when `formal_review` is enabled.
+The `start` skill, when loading a role, processes the frontmatter preload patterns: for each pattern, recursively find all `.md` files in matching directories; extract only the frontmatter block (content between the leading and closing `---`); append each block to the agent's context with the file path as reference.
 
-The **coordinator role** at `commons/roles/coordinator/role.md` exists only when `por` is enabled. It's read-broad, write-narrow: loads `commons/brief.md`, `commons/POR.md`, `areas-index.md`, all area `POR.md` files, `INBOX.md`, and active spec briefs. Writes only to `INBOX.md`, `commons/POR.md`, and specs across areas.
+A **reviewer role** is a stripped-down variant of the implementer role. Same preload (both tiers); operating boundaries restricted to verdict files; allowed skills limited to `review`. Reviewer roles only exist when `formal_review` is enabled.
+
+The **coordinator role** at `commons/roles/coordinator/role.md` exists only when `por` is enabled. Read-broad, write-narrow:
+- **Full preload**: `CLAUDE.md`, schema files, `commons/brief.md`, `commons/POR.md`, `commons/pulse.md`, `areas-index.md`, `INBOX.md`, all area `POR.md` and `pulse.md` files.
+- **Frontmatter preload**: all area `kb/` directories.
+- **Writes**: `INBOX.md`, `commons/POR.md`, specs across areas. Cannot write area kb or commons kb.
+
+See `_framework/schema/role-template.md` for the canonical template and `_framework/schema/index-format.md` for the `kb/index.md` format that the frontmatter preload complements.
 
 ---
 
@@ -439,6 +514,22 @@ Roles:
 Roles:
 - optics-researcher — optical-domain investigations
 ```
+
+### Adding a new area or sub-area
+
+The `/add-area <path>` skill walks the human through area creation. The path syntax handles both top-level areas (`/add-area engineering`) and sub-areas (`/add-area research/optics`). The skill:
+
+1. Verifies the parent path exists and the target doesn't.
+2. Asks the user (in conversation): brief description of the area's focus.
+3. Creates the directory structure (`kb/`, `raw/`, `data/`, `specs/`, `roles/`, `_journal/`).
+4. Writes `brief.md` (from user response), initial `pulse.md` template, empty `_journal/pulse.log`, empty `kb/index.md`.
+5. Asks: what role(s) should this area have? Suggests defaults based on the parent area (e.g., for `research/optics`, suggest `optics-researcher`).
+6. For each role, prompts the user to confirm or adjust the preload list (both tiers); creates the role file using `_framework/schema/role-template.md`.
+7. Checks parent-area role files: if the parent has roles whose preload patterns should now reference the new sub-area, surfaces suggestions in conversation. Applies updates after human confirmation.
+8. Runs lint to regenerate `areas-index.md` and confirm clean state.
+9. Commits the new area.
+
+If `por` is enabled, the skill also offers to create a stub `POR.md` for the new area.
 
 ---
 
@@ -680,7 +771,7 @@ Rule 6.  Type-specific completeness.
 Rule 7.  Pulse size (pulse.md exceeding line cap is an error).
 Rule 12. Data manifest integrity.
 Rule 15. Index maintenance (regenerate areas-index.md, kb/index.md).
-Rule 17. Raw immutability.
+Rule 17. Raw immutability (modifications to existing files in raw/ — additions are allowed).
 Rule 18. Maintenance category violations.
 ```
 
@@ -736,6 +827,8 @@ Each skill is a Claude Code Agent Skill with a `SKILL.md`. Skills can be invoked
 | `promote` | Apply promotion after consensus or human override; write CHANGELOG entry. Behavior depends on `formal_review`. |
 | `wrap-up` | Compact `_journal/pulse.log` → `pulse.md`; file pending pages; prompt POR updates (if `por` on); run lint. |
 | `check` | Run lint; display findings; surface shadow-rule suggestions. |
+| `budget` | Report estimated context cost of role preloads and recent session telemetry; identify heavy paths and pruning candidates. |
+| `add-area` | Walk the human through creating a new area or sub-area: directory structure, brief, pulse template, roles, and any parent-area role file updates. |
 
 **Capability-gated:**
 
@@ -776,7 +869,84 @@ Subagents don't parallelize automatically, don't carry state between invocations
 
 ---
 
-## 18. Raw materials and data manifests
+## 18. Token instrumentation and budget tracking
+
+The framework tracks per-session context cost so role preloads can be tuned and heavy paths identified. The mechanism is approximate but stable enough for comparison and pruning decisions.
+
+### What Claude Code provides natively
+
+Two interactive slash commands give exact, real-time visibility:
+
+- **`/context`** — breaks down current context usage by category (system prompt, system tools, MCP tools, custom agents, memory files, skills, messages, free space, autocompact buffer) within Claude Code's 200k token window.
+- **`/usage`** (aliases `/cost`, `/stats`) — session cost, plan usage limits, activity stats.
+
+These are the source of truth at any given moment. The framework's job is to make preload costs **predictable** ahead of time and to surface trends across sessions.
+
+### Framework instrumentation
+
+**`_framework/tools/token_estimate.py`** estimates the token cost of a role's preload list (full bodies + frontmatter blocks from matching patterns) using a tokenizer compatible with Claude's model. The estimate is approximate but consistent enough for relative comparison across roles and over time.
+
+**`_framework/tools/telemetry.py`** writes a per-session entry to `_framework/telemetry/sessions.jsonl`. The SessionStart hook records the preload estimate; the session-end hook (or `/wrap-up`) records what happened during the session. Each entry:
+
+```json
+{
+  "timestamp": "2026-05-08T09:14:00Z",
+  "session_id": "2026-05-08-am-optics",
+  "role": "optics-researcher",
+  "area": "research/optics",
+  "full_preload_files": 13,
+  "full_preload_tokens_est": 8450,
+  "frontmatter_preload_files": 47,
+  "frontmatter_preload_tokens_est": 3200,
+  "total_preload_tokens_est": 11650,
+  "pages_cited": [
+    "areas/research/optics/kb/findings/f-2026-05-shot-noise.md",
+    "areas/research/optics/kb/sources/s-2026-04-saleh-teich-ch17.md"
+  ],
+  "bodies_loaded_beyond_preload": [
+    "areas/research/optics/kb/concepts/c-2026-04-1f-noise-bias.md"
+  ]
+}
+```
+
+The `pages_cited` list is populated by scanning agent outputs for `[[wikilink]]` references. The `bodies_loaded_beyond_preload` list comes from tracking file-read tool invocations during the session — files in the preload don't count (they were always going to be loaded); files read in service of the work do.
+
+The telemetry directory is git-ignored — entries are local to each clone.
+
+### The `/budget` skill
+
+Reports recent session telemetry and identifies pruning candidates:
+
+- **Preload cost** — per-role average over the last N sessions, with 95th-percentile high-water mark.
+- **Heaviest full-tier files** — candidates for moving to frontmatter tier or dropping.
+- **Frontmatter patterns that match many files but rarely yield body-loads** — candidates for narrowing.
+- **Recommended prunes** — pages stale per the prune thresholds (see section 5), filterable by role. Same data feeds `/framework prune` for the explicit-approval flow.
+- **Budget comparison** — if a per-role `budget_tokens_est` is set in the role file's frontmatter, sessions exceeding it surface here.
+
+The skill produces a brief report; the human decides whether to revise role files (manually or via `/framework prune`).
+
+### Per-role budget targets
+
+Optionally, role files can declare a budget target in frontmatter:
+
+```yaml
+---
+role: optics-researcher
+area: research/optics
+summary: ...
+budget_tokens_est: 12000
+---
+```
+
+When set, `/budget` and `/check` flag sessions where estimated preload exceeded the target by a configurable margin.
+
+### Subagent budgets
+
+When `task_subagents` is enabled, each subagent invocation gets its own telemetry entry. Subagents typically use the same role's preload, so cost-per-task is predictable. The `/budget` skill aggregates subagent invocations separately from parent agent sessions.
+
+---
+
+## 19. Raw materials and data manifests
 
 Raw materials in `raw/` are immutable; source pages in `kb/sources/` summarize them with `provenance.raw_path` pointing to the raw file. Data manifests in `data/manifests/` describe datasets; structured input data lives in `data/`.
 
@@ -809,7 +979,7 @@ Manifests link bidirectionally with kb. Lint enforces both directions.
 
 ---
 
-## 19. What's deferred
+## 20. What's deferred
 
 - Multi-user collaboration.
 - Search beyond `index.md`.
@@ -819,15 +989,15 @@ Manifests link bidirectionally with kb. Lint enforces both directions.
 
 ---
 
-## 20. Bootstrap path
+## 21. Bootstrap path
 
 1. Create the template repo with `_framework/` populated, plus empty `commons/` and `areas/` skeletons. Write `CLAUDE.md` (always-on sections only), `_framework/config.yml` with initial state (all four capabilities off; all warnings shadowed).
 
-2. Write `lint.py`, `pulse_compact.py`, `promote.py`, `framework.py`, and `activity_days.py` as deterministic Python.
+2. Write `lint.py`, `pulse_compact.py`, `promote.py`, `framework.py`, `activity_days.py`, `token_estimate.py`, and `telemetry.py` as deterministic Python.
 
-3. Write the always-available skills as `_framework/skills/<name>/SKILL.md` with explicit trigger language. Write the capability-gated skills too, but the `framework` skill registers them with Claude Code based on `config.yml`.
+3. Write the always-available skills as `_framework/skills/<name>/SKILL.md` with explicit trigger language. Write the capability-gated skills too — all skills ship with the template; the `framework` skill manages activation state via `config.yml`.
 
-4. Write `_framework/schema/capabilities.md` with one section per capability, declaratively describing the file edits each enable/disable operation performs.
+4. Write `_framework/schema/capabilities.md` and the four snippet files in `_framework/schema/claude-snippets/` (one per capability) declaratively describing what each enable/disable operation does.
 
 5. Pick one project to instantiate. Write `commons/brief.md`. Pick 2 areas to start. Write area `brief.md` and one role per area.
 
@@ -839,7 +1009,7 @@ Manifests link bidirectionally with kb. Lint enforces both directions.
 
 ---
 
-## 21. Open questions
+## 22. Open questions
 
 **Pulse line cap.** Default 80 lines. Reasonable across areas, or do some areas need different caps?
 

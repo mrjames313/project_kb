@@ -9,10 +9,27 @@ Each capability section below describes:
 - **Dependencies** — capabilities that must also be enabled.
 - **Files created on enable** — what comes into existence.
 - **Files made inert on disable** — content that stays on disk but stops being referenced.
-- **CLAUDE.md sections** — which schema document sections are added/removed.
+- **CLAUDE.md sections** — which schema document sections are added/removed; references the snippet files in `claude-snippets/` that contain the actual text.
 - **Role file edits** — what changes in role files (preload lists, boundaries, allowed skills).
 - **Skill availability** — which skills become available or unavailable.
 - **Lint rule changes** — which rules start or stop running.
+
+## Skill activation
+
+All sixteen skills ship with the template in `_framework/skills/`. Capability gating controls **activation state**, not file presence:
+
+- The `framework` skill maintains a registry of currently-active skills.
+- Capability-gated skills are present on disk but not active until their capability is enabled.
+- `/framework enable <capability>` activates the gated skills; `/framework disable <capability>` deactivates them.
+- Activation mechanism is implementation-defined (could be a registration manifest, file rename, or symlink scheme); the skill's SKILL.md content is preserved either way.
+
+Re-enabling a capability picks up the existing skill files where they are — no regeneration.
+
+## CLAUDE.md snippets
+
+Each capability has an associated snippet file in `_framework/schema/claude-snippets/<capability>.md` containing the exact CLAUDE.md section text to insert on enable. The `framework` skill reads the snippet file and splices it into CLAUDE.md at a marker position (between always-on sections, before "Escalation triggers").
+
+On disable, the framework skill identifies the snippet's boundaries in CLAUDE.md (via the section heading) and removes it.
 
 ---
 
@@ -29,7 +46,7 @@ Each capability section below describes:
 **Files made inert on disable**: existing `exchanges/<a>--<b>/` directories. They remain on disk but skills become unavailable.
 
 **CLAUDE.md sections**:
-- Insert on enable: `## Cross-area reads`
+- Insert on enable: contents of `_framework/schema/claude-snippets/multi_area.md`.
 - Remove on disable: same.
 
 **Role file edits**:
@@ -52,18 +69,18 @@ Each capability section below describes:
 **Dependencies**: none
 
 **Files created on enable**:
-- `commons/POR.md` (with placeholder template content; user fills in).
+- `commons/POR.md` (placeholder template; user fills in).
 - `areas/<area>/POR.md` for every existing area and sub-area (same).
 - `commons/roles/coordinator/role.md` with the coordinator role definition.
 
 **Files made inert on disable**: existing POR files remain on disk. The coordinator role file is removed from `commons/roles/`.
 
 **CLAUDE.md sections**:
-- Insert on enable: `## POR discipline`.
+- Insert on enable: contents of `_framework/schema/claude-snippets/por.md`.
 - Remove on disable: same.
 
 **Role file edits**:
-- Insert in **Preload context** (on enable, every role): `/commons/POR.md` and `/areas/<their-area>/POR.md`.
+- Insert in **Full preload** (on enable, every role): `/commons/POR.md` and `/areas/<their-area>/POR.md`.
 - Remove on disable: same.
 
 **Skill availability**: none added. The `wrap-up` skill changes behavior (prompts for POR updates when relevant events happened), but the skill itself is always available.
@@ -87,7 +104,7 @@ Each capability section below describes:
 **Files made inert on disable**: none.
 
 **CLAUDE.md sections**:
-- Insert on enable: `## Subagent pattern`.
+- Insert on enable: contents of `_framework/schema/claude-snippets/task_subagents.md`.
 - Remove on disable: same.
 
 **Role file edits**: none.
@@ -106,12 +123,12 @@ Each capability section below describes:
 
 **Dependencies**: `task_subagents` must be enabled. If `formal_review` is requested without `task_subagents`, the `framework` skill offers to enable both.
 
-**Files created on enable**: for each existing area, a reviewer variant of each role at `areas/<area>/roles/<role-name>-reviewer/role.md`. Reviewer role files are derived from the implementer role's preload list, with `Operating boundaries` restricted to writes within the verdict file path, and `Allowed skills` limited to `review`.
+**Files created on enable**: for each existing area, a reviewer variant of each role at `areas/<area>/roles/<role-name>-reviewer/role.md`. Reviewer role files are derived from the implementer role's preload list (both tiers), with `Operating boundaries` restricted to writes within the verdict file path, and `Allowed skills` limited to `review`.
 
 **Files made inert on disable**: reviewer role files are removed from each area's `roles/` directory.
 
 **CLAUDE.md sections**:
-- Insert on enable: `## Formal review`.
+- Insert on enable: contents of `_framework/schema/claude-snippets/formal_review.md`.
 - Remove on disable: same.
 
 **Role file edits**:

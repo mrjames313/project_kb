@@ -33,3 +33,10 @@ lint:
     rule_13_backlinker_freshness: false
     rule_14_exchange_staleness: false
     rule_16_cross_area_reads: false
+
+prune:
+  # Thresholds for /framework prune analysis (in active sessions).
+  # Full tier is stricter because bodies are expensive; frontmatter tier
+  # is cheaper to keep, so the threshold for stale-ness is higher.
+  full_tier_stale_sessions: 10
+  frontmatter_tier_stale_sessions: 30

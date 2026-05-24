@@ -28,3 +28,6 @@ desktop.ini
 
 # Lint sidecars are generated, not committed
 **/*.links.json
+
+# Telemetry is per-clone, not committed
+_framework/telemetry/

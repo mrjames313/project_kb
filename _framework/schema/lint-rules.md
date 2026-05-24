@@ -48,7 +48,9 @@ The linter regenerates `areas-index.md` (from area briefs and role summaries) an
 
 ### Rule 17 — Raw immutability
 
-Detect modifications to files under `raw/` since their initial commit. Raw materials must not be edited; agents read but never modify.
+Detect modifications to files in `raw/` after their initial commit. Raw materials are **immutable once added**: existing files must never be edited or deleted.
+
+New raw materials may be added at any time (typically via `/ingest`, which creates both the raw file and its source-summary page in `kb/sources/`). Lint distinguishes additions (allowed) from modifications (errors) by checking git status — files whose initial commit was the current commit are fine; files with subsequent edits trigger the rule.
 
 ### Rule 18 — Maintenance category violations
 

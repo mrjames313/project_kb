@@ -2,6 +2,27 @@
 
 Every markdown file in `kb/` directories and every data manifest carries YAML frontmatter. This document is the canonical reference.
 
+## Frontmatter discipline
+
+Frontmatter is written at file creation and updated whenever the page's content materially changes. The flow depends on the creation path:
+
+- **`/ingest`** — produces a `source` page with full frontmatter (provenance pointing into `raw/`, retrieved date, summary).
+- **`/ask`** synthesis — when a query produces a novel answer worth preserving, the agent files a new `finding` (or `concept` if not yet established) with summary, evidence list pointing to source pages used, and area set to the current role's area.
+- **In-conversation work** — when the user and agent develop an idea or hypothesis, the agent files a `concept` page starting at status `seed` or `developing`, with minimal frontmatter (id, type, status, summary, area, relevant_to).
+- **`/wrap-up` compaction** — entries in `_journal/pulse.log` flagged `→ to be filed: ...` are materialized into kb pages during compaction. Frontmatter is derived from the log entry plus the area context.
+- **`/replan`** — if a replan produces a new decision worth recording independently of the spec, the skill spawns a `decision` page.
+- **`/promote`** — promotion updates frontmatter (type and area transitions, plus `human_reviewed: false` and `promoted_from`/`promoted_on` for commons promotions). Other frontmatter fields are preserved.
+
+When updating an existing page:
+
+- Always bump `updated` to the current date when the body changes substantively.
+- Update `status` when the page's epistemic position has shifted (concept stage moves, finding becomes archived, decision is superseded).
+- Update type-specific fields (`evidence`, `confidence`, `superseded_by`) as new information arrives.
+- Never change `type` by hand-editing — use `/promote` for type transitions.
+- Never change `id` once a page is created — IDs are stable references.
+
+Required-at-creation fields (per type) are enforced by lint Rule 6. Status transitions that leave required fields empty are also caught by lint.
+
 ## Required fields on all kb pages
 
 ```yaml
