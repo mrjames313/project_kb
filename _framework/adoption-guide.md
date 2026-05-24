@@ -13,7 +13,7 @@ This guide takes you from zero to working.
 
 ### Two principles to start with
 
-**Areas are workspaces; commons holds shared truth.** A project has one or more areas — research, engineering, product, business model, or whatever your project is composed of. Each area is a folder with its own knowledge base (`kb/`), raw materials (`raw/`), code, and data. You work in one area at a time. Everything project-wide — the mission, distilled findings, key decisions — lives in `commons/`. You don't write to commons directly; findings get promoted from areas through a small protocol.
+**Areas are workspaces; commons holds shared knowledge.** A project has one or more areas — research, engineering, product, business model, or whatever your project is composed of. Each area is a folder with its own knowledge base (`kb/`), raw materials (`raw/`), code, and data. You work in one area at a time. Everything project-wide — the mission, distilled findings, key decisions — lives in `commons/`. You don't write to commons directly; findings get promoted from areas through a small protocol.
 
 **Roles guide context loading.** Each area defines agent roles (e.g., `researcher`, `engineer`) with an explicit preload list — the files agents load when working in that role. As you write knowledge pages, their frontmatter (summary, type, `relevant_to`) helps agents decide what else to bring into context. You don't tell agents what to load on the fly; your role files and frontmatter say it for you.
 
