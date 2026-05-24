@@ -146,10 +146,20 @@ Write the filled-in file to `areas/$AREA_NAME/roles/$ROLE_NAME/role.md`. Show it
 
 ### Step 6: Verify and commit
 
+Install the lint tool's dependencies (one-time per project):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -r _framework/tools/requirements.txt
+```
+
+If the user already has a venv or prefers system Python, ask which they'd like and follow their preference. (For system-wide install on systems that require it, use `pip install --break-system-packages -r _framework/tools/requirements.txt` instead.)
+
 Run the linter:
 
 ```bash
-python3 _framework/tools/lint.py
+python _framework/tools/lint.py
 ```
 
 Surface any errors to the user. If the linter is clean, commit:

@@ -4,11 +4,30 @@ Deterministic Python helpers used by the framework. Run from the repo root.
 
 ## Setup
 
+Requires Python 3.10+.
+
+The recommended approach is a venv at the repo root so dependencies stay local to the project:
+
 ```bash
+python -m venv .venv
+source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r _framework/tools/requirements.txt
 ```
 
-Requires Python 3.10+.
+For running the test suite, also install pytest:
+
+```bash
+pip install pytest
+```
+
+If you'd rather not use a venv, install globally with `--break-system-packages` (on systems that require it):
+
+```bash
+pip install -r _framework/tools/requirements.txt
+pip install pytest    # only if running tests
+```
+
+In either case, activate the venv before invoking the tools, or run them via `./.venv/bin/python _framework/tools/lint.py`.
 
 ## Tools
 
@@ -37,6 +56,37 @@ Implemented in commit 2a (errors only):
 
 Deferred for later commits: configurable warnings (Rule 4, 8, 9, 10, 11, 13, 14, 16) and Rule 18 (maintenance-category violations).
 
+### `token_estimate.py` — preload token-cost estimator
+
+Estimates the token cost of loading a role's preload list (both full and frontmatter tiers). Used by `/budget` to identify heavy roles and by the telemetry layer to record per-session preload cost.
+
+```bash
+python _framework/tools/token_estimate.py areas/research/roles/researcher/role.md
+python _framework/tools/token_estimate.py areas/research/roles/researcher/role.md --json
+```
+
+The estimate is character-count-based (chars / 4). Accurate enough for relative comparisons (which is what `/budget` and `/framework prune` actually need); not a substitute for Claude Code's `/context` for exact runtime numbers.
+
+### `telemetry.py` — per-session event log
+
+Writes session events to `_framework/telemetry/sessions.jsonl` (git-ignored). Each session generates two events: a `session_start` with the preload estimate and a `session_end` with citation/load data.
+
+```bash
+# Recorded by the start skill when it adopts a role
+python _framework/tools/telemetry.py session-start --role areas/research/roles/researcher/role.md
+
+# Recorded by /wrap-up or the session-end hook
+python _framework/tools/telemetry.py session-end \
+    --cited "areas/research/kb/findings/f-1.md,areas/research/kb/concepts/c-3.md" \
+    --loaded "areas/research/kb/concepts/c-4.md"
+
+# Inspect recent sessions
+python _framework/tools/telemetry.py recent --n 10
+python _framework/tools/telemetry.py recent --n 10 --json
+```
+
+The telemetry log feeds `/budget` (per-role trends, heavy paths) and `/framework prune` (stale-preload detection based on citation history). Both consumers will land in later commits.
+
 ### `activity_days.py` — git-log-derived active days
 
 Helper used by lint and other tools for activity-based thresholds.
@@ -53,7 +103,7 @@ cd _framework/tools
 python -m pytest tests/ -q
 ```
 
-Tests cover each rule module's pass case and per-violation cases, plus `activity_days` edge cases (empty repo, cold-project resumption, same-day deduplication).
+Tests cover each rule module's pass case and per-violation cases, plus `activity_days`, `token_estimate`, and `telemetry` edge cases (empty repo, cold-project resumption, role file outside repo root, unpaired session_end, etc.).
 
 ## Architecture
 
@@ -65,5 +115,7 @@ def check(repo_root: Path, config: dict) -> list[Finding]:
 ```
 
 `lint.py` runs fixup rules first (rules 3 and 15, which write files), then inspection rules. Shared utilities are in `common.py`. Tests share fixtures from `tests/conftest.py` and `tests/lint_helpers.py`.
+
+`token_estimate.py` and `telemetry.py` are standalone but interoperate: telemetry calls `estimate_role_preload` when recording a session start.
 
 The lint tools have no dependencies on Claude or any LLM — they're pure Python with PyYAML and stdlib only.
