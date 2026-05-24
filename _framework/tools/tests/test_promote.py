@@ -1,0 +1,164 @@
+"""
+Tests for _framework/tools/promote.py
+"""
+
+from __future__ import annotations
+
+import textwrap
+from datetime import date
+from pathlib import Path
+
+import pytest
+
+from promote import PromoteError, promote
+
+from lint_helpers import make_minimal_repo
+
+
+def _write_proposal(repo_root: Path, slug: str, page_type: str, page_id: str,
+                    *, source_area: str = "research") -> Path:
+    """Create a commons/_proposed/<slug>/ with page.md and proposal.md."""
+    proposed = repo_root / "commons" / "_proposed" / slug
+    proposed.mkdir(parents=True)
+
+    page = proposed / "page.md"
+    page.write_text(textwrap.dedent(f"""
+        ---
+        id: {page_id}
+        title: Test {page_type}
+        type: {page_type}
+        status: active
+        area: {source_area}
+        created: 2026-05-08
+        updated: 2026-05-08
+        summary: A test {page_type} for promotion.
+        relevant_to:
+          - test
+        {"provenance:" if page_type == "finding" else "alternatives_considered: []" if page_type == "decision" else ""}
+        {"  kind: experiment" if page_type == "finding" else ""}
+        ---
+
+        Body of the {page_type}.
+    """).strip() + "\n")
+
+    proposal = proposed / "proposal.md"
+    proposal.write_text(textwrap.dedent(f"""
+        ---
+        proposing_area: {source_area}
+        proposed_on: 2026-05-08
+        ---
+
+        # Proposal: promote {page_id}
+
+        Rationale here.
+    """).strip() + "\n")
+
+    return proposed
+
+
+class TestPromote:
+    def test_moves_page_to_kb(self, tmp_path: Path) -> None:
+        make_minimal_repo(tmp_path)
+        _write_proposal(tmp_path, "2026-05-shot-noise", "finding", "f-2026-05-shot-noise")
+        result = promote("2026-05-shot-noise", tmp_path)
+
+        target = tmp_path / "commons" / "kb" / "findings" / "f-2026-05-shot-noise.md"
+        assert target.is_file()
+        assert result.moved_to == "commons/kb/findings/f-2026-05-shot-noise.md"
+        # Original page.md should be gone
+        assert not (tmp_path / "commons" / "_proposed" / "2026-05-shot-noise" / "page.md").exists()
+        # Other files in the proposal dir remain
+        assert (tmp_path / "commons" / "_proposed" / "2026-05-shot-noise" / "proposal.md").exists()
+
+    def test_updates_frontmatter(self, tmp_path: Path) -> None:
+        make_minimal_repo(tmp_path)
+        _write_proposal(tmp_path, "test-slug", "finding", "f-2026-05-test")
+        promote("test-slug", tmp_path)
+
+        target = tmp_path / "commons" / "kb" / "findings" / "f-2026-05-test.md"
+        content = target.read_text()
+        assert "area: commons" in content
+        assert "human_reviewed: false" in content
+        assert "promoted_from: research" in content
+        assert f"promoted_on: {date.today().isoformat()}" in content
+
+    def test_preserves_body(self, tmp_path: Path) -> None:
+        make_minimal_repo(tmp_path)
+        _write_proposal(tmp_path, "test-slug", "finding", "f-2026-05-test")
+        promote("test-slug", tmp_path)
+
+        target = tmp_path / "commons" / "kb" / "findings" / "f-2026-05-test.md"
+        content = target.read_text()
+        assert "Body of the finding." in content
+
+    def test_writes_changelog_entry(self, tmp_path: Path) -> None:
+        make_minimal_repo(tmp_path)
+        # Pre-create CHANGELOG with the standard intro
+        changelog = tmp_path / "commons" / "CHANGELOG.md"
+        changelog.write_text("# Commons Changelog\n\n_Append-only record._\n\n_No promotions yet._\n")
+
+        _write_proposal(tmp_path, "test-slug", "finding", "f-2026-05-test")
+        promote("test-slug", tmp_path)
+
+        content = changelog.read_text()
+        assert "promoted finding" in content
+        assert "[[f-2026-05-test]]" in content
+        assert "From: research" in content
+        # Placeholder should be gone (or at least the new entry should be near the top)
+        # New entry should appear before any old "_No promotions yet._"
+        new_pos = content.find("promoted finding")
+        placeholder_pos = content.find("_No promotions yet._")
+        if placeholder_pos != -1:
+            assert new_pos < placeholder_pos
+
+    def test_decision_goes_to_decisions_dir(self, tmp_path: Path) -> None:
+        make_minimal_repo(tmp_path)
+        _write_proposal(tmp_path, "decision-slug", "decision", "d-2026-05-test")
+        result = promote("decision-slug", tmp_path)
+        assert result.moved_to == "commons/kb/decisions/d-2026-05-test.md"
+        assert (tmp_path / "commons" / "kb" / "decisions" / "d-2026-05-test.md").is_file()
+
+    def test_concept_goes_to_concepts_dir(self, tmp_path: Path) -> None:
+        make_minimal_repo(tmp_path)
+        # Concept proposals: write manually since helper assumes finding/decision
+        proposed = tmp_path / "commons" / "_proposed" / "concept-slug"
+        proposed.mkdir(parents=True)
+        (proposed / "page.md").write_text(textwrap.dedent("""
+            ---
+            id: c-2026-05-test
+            title: Test concept
+            type: concept
+            status: supported
+            area: research
+            created: 2026-05-08
+            updated: 2026-05-08
+            summary: A test concept.
+            relevant_to:
+              - test
+            evidence:
+              - "[[s-foo]]"
+            ---
+
+            Concept body.
+        """).strip() + "\n")
+        (proposed / "proposal.md").write_text(
+            "---\nproposing_area: research\nproposed_on: 2026-05-08\n---\n\nProposal.\n"
+        )
+        result = promote("concept-slug", tmp_path)
+        assert result.moved_to == "commons/kb/concepts/c-2026-05-test.md"
+
+    def test_missing_proposal_raises(self, tmp_path: Path) -> None:
+        make_minimal_repo(tmp_path)
+        with pytest.raises(PromoteError):
+            promote("nonexistent", tmp_path)
+
+    def test_target_exists_raises(self, tmp_path: Path) -> None:
+        make_minimal_repo(tmp_path)
+        _write_proposal(tmp_path, "test-slug", "finding", "f-2026-05-test")
+        # Pre-create the target
+        target_dir = tmp_path / "commons" / "kb" / "findings"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / "f-2026-05-test.md").write_text("existing")
+        with pytest.raises(PromoteError) as exc_info:
+            promote("test-slug", tmp_path)
+        assert "already exists" in str(exc_info.value)

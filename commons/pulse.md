@@ -8,11 +8,11 @@ _(set when work begins)_
 
 ## Recent decisions (last 7 active days)
 
-_None yet._
+_None._
 
 ## Active concepts under test
 
-_None yet._
+_None._
 
 ## Open questions
 
@@ -20,4 +20,4 @@ _None yet._
 
 ## Recent findings (last 5)
 
-_None yet._
+_None._

@@ -1,0 +1,479 @@
+"""
+Compact pulse — materialize pulse.log events into pulse.md, then truncate the log.
+
+For each area (and commons) with a _journal/pulse.log:
+
+1. Read the log and parse entries.
+2. Verify any '→ to be filed:' references resolve to existing kb pages
+   (warn if not — the agent should have created the page during the session).
+3. Update pulse.md:
+   - Preserved sections: "Current focus" and "Open questions" — updated from
+     focus-shift and question log entries.
+   - Regenerated sections: "Recent decisions", "Active concepts under test",
+     "Recent findings" — rebuilt from the current kb state, scoped to the area.
+4. Verify the compacted pulse.md is under the line cap.
+5. Truncate the pulse.log.
+
+Idempotent: running compact twice in a row with no log entries between is a no-op.
+
+Public API:
+    compact_area(area_dir, repo_root, config) -> CompactResult
+    compact_all(repo_root, config) -> dict[area_path, CompactResult]
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from dataclasses import dataclass, field
+from datetime import date
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from activity_days import active_days_back  # noqa: E402
+from common import (  # noqa: E402
+    find_repo_root,
+    iter_areas,
+    load_config,
+    parse_frontmatter,
+)
+
+
+# --- Log entry parsing ---
+
+_LOG_HEADING_RE = re.compile(
+    r"^##\s+\[(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\]\s+(?P<event>\S+)(?:\s+(?P<role>.+))?$"
+)
+_FILED_RE = re.compile(r"^→\s+to be filed:\s+(?P<path>\S+)\s*$")
+
+
+@dataclass
+class LogEntry:
+    timestamp: str  # "YYYY-MM-DD HH:MM"
+    event_type: str  # decision | finding | concept | focus-shift | question
+    role: str | None
+    description: str  # everything between the heading and the `→ to be filed:` (if any)
+    filed_path: str | None  # e.g., "decisions/d-2026-05-04-bias-current"
+
+
+def parse_pulse_log(log_text: str) -> list[LogEntry]:
+    """Parse a pulse.log file into entries. Skip malformed sections rather than fail."""
+    entries: list[LogEntry] = []
+    current: LogEntry | None = None
+    description_lines: list[str] = []
+
+    def flush() -> None:
+        if current is not None:
+            current.description = "\n".join(description_lines).strip()
+            entries.append(current)
+
+    for raw_line in log_text.splitlines():
+        line = raw_line.rstrip()
+        m = _LOG_HEADING_RE.match(line)
+        if m:
+            flush()
+            current = LogEntry(
+                timestamp=m.group("ts"),
+                event_type=m.group("event").strip(),
+                role=(m.group("role") or "").strip() or None,
+                description="",
+                filed_path=None,
+            )
+            description_lines = []
+            continue
+
+        if current is None:
+            continue
+
+        filed_match = _FILED_RE.match(line)
+        if filed_match:
+            current.filed_path = filed_match.group("path").strip()
+            continue
+
+        description_lines.append(line)
+
+    flush()
+    return entries
+
+
+# --- pulse.md section parsing ---
+
+_SECTION_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
+
+
+def split_sections(md_text: str) -> dict[str, list[str]]:
+    """
+    Split pulse.md content into sections by H2 heading.
+    Returns {section_name: list_of_lines}.
+
+    Lines before the first H2 are stored under key "".
+    Section names are normalized: lowercased, parenthetical detail stripped.
+    The full original heading line is kept as the first line of the section.
+    """
+    sections: dict[str, list[str]] = {"": []}
+    current_key = ""
+    for line in md_text.splitlines():
+        m = _SECTION_HEADING_RE.match(line)
+        if m:
+            heading = m.group(1).strip()
+            # Normalize: drop parenthetical, lowercase
+            key = re.sub(r"\s*\(.*?\)\s*$", "", heading).strip().lower()
+            current_key = key
+            sections.setdefault(current_key, [])
+            sections[current_key].append(line)
+        else:
+            sections.setdefault(current_key, []).append(line)
+    return sections
+
+
+# --- Querying kb state for regeneration ---
+
+@dataclass
+class KbEntry:
+    """Lightweight kb-page record for pulse regeneration."""
+    page_id: str
+    title: str
+    summary: str
+    status: str
+    type: str
+    updated: str  # ISO date
+    path: Path
+    confidence: str | None = None
+
+
+def scan_kb(kb_dir: Path) -> list[KbEntry]:
+    """Walk a kb/ directory, return KbEntry for every page (excluding index.md)."""
+    entries: list[KbEntry] = []
+    if not kb_dir.is_dir():
+        return entries
+    for md in kb_dir.rglob("*.md"):
+        if md.name == "index.md":
+            continue
+        try:
+            fm, _ = parse_frontmatter(md.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if not fm:
+            continue
+        entries.append(KbEntry(
+            page_id=str(fm.get("id", md.stem)),
+            title=str(fm.get("title", "")),
+            summary=str(fm.get("summary", "")),
+            status=str(fm.get("status", "")),
+            type=str(fm.get("type", "")),
+            updated=str(fm.get("updated", "")),
+            path=md,
+            confidence=str(fm["confidence"]) if "confidence" in fm else None,
+        ))
+    return entries
+
+
+def filter_recent_by_active_days(
+    entries: list[KbEntry],
+    days_back: int,
+    repo_root: Path,
+) -> list[KbEntry]:
+    """Filter to entries whose `updated` is on or after `days_back` active days ago."""
+    cutoff_date = active_days_back(days_back, repo_root=repo_root)
+    if cutoff_date is None:
+        return entries  # not enough history; keep everything
+    cutoff_iso = cutoff_date.isoformat()
+    return [e for e in entries if e.updated and e.updated >= cutoff_iso]
+
+
+# --- Section regenerators ---
+
+def regenerate_recent_decisions(
+    kb_entries: list[KbEntry], repo_root: Path, days_back: int
+) -> list[str]:
+    """Build the body of the "Recent decisions" section."""
+    decisions = [e for e in kb_entries if e.type == "decision" and e.status == "active"]
+    recent = filter_recent_by_active_days(decisions, days_back, repo_root)
+    recent.sort(key=lambda e: e.updated, reverse=True)
+    lines = [f"## Recent decisions (last {days_back} active days)", ""]
+    if not recent:
+        lines.append("_None._")
+    else:
+        for e in recent:
+            summary = e.summary.split(".")[0] if e.summary else e.title
+            lines.append(f"- [[{e.page_id}]] — {summary}")
+    lines.append("")
+    return lines
+
+
+def regenerate_concepts_under_test(kb_entries: list[KbEntry]) -> list[str]:
+    """Build the body of the "Active concepts under test" section."""
+    concepts = [e for e in kb_entries if e.type == "concept" and e.status == "under_test"]
+    concepts.sort(key=lambda e: e.updated, reverse=True)
+    lines = ["## Active concepts under test", ""]
+    if not concepts:
+        lines.append("_None._")
+    else:
+        for e in concepts:
+            conf = f" · {e.confidence} confidence" if e.confidence else ""
+            summary = e.summary.split(".")[0] if e.summary else e.title
+            lines.append(f"- [[{e.page_id}]]{conf} — {summary}")
+    lines.append("")
+    return lines
+
+
+def regenerate_recent_findings(kb_entries: list[KbEntry], max_count: int = 5) -> list[str]:
+    """Build the body of the "Recent findings" section."""
+    findings = [e for e in kb_entries if e.type == "finding" and e.status == "active"]
+    findings.sort(key=lambda e: e.updated, reverse=True)
+    findings = findings[:max_count]
+    lines = [f"## Recent findings (last {max_count})", ""]
+    if not findings:
+        lines.append("_None._")
+    else:
+        for e in findings:
+            summary = e.summary.split(".")[0] if e.summary else e.title
+            lines.append(f"- [[{e.page_id}]] — {summary}")
+    lines.append("")
+    return lines
+
+
+# --- Applying log entries to preserved sections ---
+
+def update_current_focus(existing_section: list[str], log_entries: list[LogEntry]) -> list[str]:
+    """
+    If any focus-shift entries exist in the log, the most recent one replaces
+    the body of "Current focus". Otherwise leave the section as-is.
+    """
+    focus_shifts = [e for e in log_entries if e.event_type == "focus-shift"]
+    if not focus_shifts:
+        return existing_section
+    latest = focus_shifts[-1]
+    description = latest.description.strip() or "_(set by recent focus-shift)_"
+    return ["## Current focus", "", description, ""]
+
+
+def update_open_questions(existing_section: list[str], log_entries: list[LogEntry]) -> list[str]:
+    """
+    Append new questions from log entries to the "Open questions" section,
+    deduplicating against existing questions.
+    """
+    existing_questions: list[str] = []
+    capture = False
+    for line in existing_section:
+        if line.startswith("##"):
+            capture = True
+            continue
+        if not capture:
+            continue
+        if line.strip().startswith("-"):
+            existing_questions.append(line.strip()[1:].strip())
+
+    existing_lower = {q.lower() for q in existing_questions}
+
+    for e in log_entries:
+        if e.event_type == "question":
+            q = e.description.strip()
+            if q and q.lower() not in existing_lower:
+                existing_questions.append(q)
+                existing_lower.add(q.lower())
+
+    lines = ["## Open questions", ""]
+    if not existing_questions:
+        lines.append("_None yet._")
+    else:
+        for q in existing_questions:
+            lines.append(f"- {q}")
+    lines.append("")
+    return lines
+
+
+# --- Compaction ---
+
+@dataclass
+class CompactResult:
+    area_path: str
+    entries_compacted: int
+    missing_filed_paths: list[str] = field(default_factory=list)
+    pulse_line_count: int = 0
+    over_cap: bool = False
+    cap: int = 0
+    truncated_log: bool = False
+
+
+def _identify_kb_dir(area_dir: Path) -> Path:
+    return area_dir / "kb"
+
+
+def _identify_pulse_md(area_dir: Path) -> Path:
+    return area_dir / "pulse.md"
+
+
+def _identify_pulse_log(area_dir: Path) -> Path:
+    return area_dir / "_journal" / "pulse.log"
+
+
+def compact_area(area_dir: Path, repo_root: Path, config: dict) -> CompactResult:
+    """
+    Compact one area (or commons). area_dir is the directory containing pulse.md.
+
+    Idempotent — running with an empty log is a no-op.
+    """
+    area_dir = area_dir.resolve()
+    repo_root = repo_root.resolve()
+
+    pulse_md = _identify_pulse_md(area_dir)
+    pulse_log = _identify_pulse_log(area_dir)
+    kb_dir = _identify_kb_dir(area_dir)
+
+    try:
+        rel_area = str(area_dir.relative_to(repo_root))
+    except ValueError:
+        rel_area = str(area_dir)
+
+    result = CompactResult(area_path=rel_area, entries_compacted=0)
+
+    if not pulse_md.is_file():
+        # Nothing to compact; not an error
+        return result
+
+    # Parse log if present
+    log_entries: list[LogEntry] = []
+    if pulse_log.is_file():
+        log_text = pulse_log.read_text(encoding="utf-8")
+        log_entries = parse_pulse_log(log_text)
+        result.entries_compacted = len(log_entries)
+
+    # Verify filed paths
+    for entry in log_entries:
+        if entry.filed_path:
+            # filed_path is relative to the area's kb/ (e.g., "decisions/d-...")
+            candidate = kb_dir / f"{entry.filed_path}.md" if not entry.filed_path.endswith(".md") else kb_dir / entry.filed_path
+            if not candidate.is_file():
+                result.missing_filed_paths.append(entry.filed_path)
+
+    # Scan kb to drive regenerated sections
+    kb_entries = scan_kb(kb_dir)
+
+    # Load and split current pulse.md
+    pulse_text = pulse_md.read_text(encoding="utf-8")
+    sections = split_sections(pulse_text)
+
+    lint_cfg = config.get("lint", {}) if isinstance(config, dict) else {}
+    days_back = int(lint_cfg.get("recent_decisions_window_active_days", 7))
+    line_cap = int(lint_cfg.get("pulse_line_cap", 80))
+    result.cap = line_cap
+
+    # Build the new pulse.md from sections in canonical order
+    new_lines: list[str] = []
+
+    # Preamble (everything before the first section)
+    preamble = sections.get("", [])
+    if preamble:
+        new_lines.extend(preamble)
+        if new_lines and new_lines[-1].strip() != "":
+            new_lines.append("")
+    else:
+        # If there's no preamble, drop in a basic title
+        title = f"# {rel_area} — pulse" if rel_area != "commons" else "# Commons — pulse"
+        new_lines.extend([title, ""])
+
+    # 1) Current focus (preserved, optionally updated from log)
+    current_focus_existing = sections.get("current focus", ["## Current focus", "", "_(set when work begins)_", ""])
+    new_lines.extend(update_current_focus(current_focus_existing, log_entries))
+
+    # 2) Recent decisions (regenerated)
+    new_lines.extend(regenerate_recent_decisions(kb_entries, repo_root, days_back))
+
+    # 3) Active concepts under test (regenerated)
+    new_lines.extend(regenerate_concepts_under_test(kb_entries))
+
+    # 4) Open questions (preserved + updates from log)
+    open_q_existing = sections.get("open questions", ["## Open questions", "", "_None yet._", ""])
+    new_lines.extend(update_open_questions(open_q_existing, log_entries))
+
+    # 5) Recent findings (regenerated)
+    new_lines.extend(regenerate_recent_findings(kb_entries))
+
+    # Write back, normalizing trailing whitespace
+    new_text = "\n".join(line.rstrip() for line in new_lines).rstrip() + "\n"
+    pulse_md.write_text(new_text, encoding="utf-8")
+
+    result.pulse_line_count = len(new_text.splitlines())
+    result.over_cap = result.pulse_line_count > line_cap
+
+    # Truncate the log only if we successfully wrote pulse.md
+    if pulse_log.is_file():
+        pulse_log.write_text("", encoding="utf-8")
+        result.truncated_log = True
+
+    return result
+
+
+def compact_all(repo_root: Path, config: dict) -> dict[str, CompactResult]:
+    """Compact commons and every area. Returns map keyed by area path."""
+    results: dict[str, CompactResult] = {}
+    commons = repo_root / "commons"
+    if (commons / "pulse.md").is_file():
+        results["commons"] = compact_area(commons, repo_root, config)
+    for area_dir in iter_areas(repo_root):
+        rel = str(area_dir.relative_to(repo_root))
+        results[rel] = compact_area(area_dir, repo_root, config)
+    return results
+
+
+# --- CLI ---
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Compact pulse.log into pulse.md.")
+    parser.add_argument(
+        "area",
+        nargs="?",
+        help="path to area directory to compact (default: all areas + commons)",
+    )
+    parser.add_argument(
+        "--repo",
+        type=Path,
+        default=None,
+        help="path to repo root (default: auto-detect from cwd)",
+    )
+    args = parser.parse_args()
+
+    try:
+        repo_root = args.repo.resolve() if args.repo else find_repo_root()
+    except RuntimeError as e:
+        print(f"pulse_compact: {e}", file=sys.stderr)
+        return 2
+
+    try:
+        config = load_config(repo_root)
+    except RuntimeError as e:
+        print(f"pulse_compact: {e}", file=sys.stderr)
+        return 2
+
+    if args.area:
+        area_dir = Path(args.area).resolve()
+        result = compact_area(area_dir, repo_root, config)
+        _print_result(result)
+        return 0 if not result.over_cap else 1
+
+    results = compact_all(repo_root, config)
+    if not results:
+        print("pulse_compact: no pulse files found.")
+        return 0
+    any_over_cap = False
+    for area, result in results.items():
+        _print_result(result)
+        any_over_cap = any_over_cap or result.over_cap
+    return 0 if not any_over_cap else 1
+
+
+def _print_result(result: CompactResult) -> None:
+    status = "OK" if not result.over_cap else f"OVER CAP ({result.pulse_line_count}/{result.cap})"
+    print(f"{result.area_path}: {result.entries_compacted} entries compacted, "
+          f"pulse {result.pulse_line_count} lines [{status}]")
+    if result.missing_filed_paths:
+        print("  Warning: filed paths from log not found on disk:")
+        for p in result.missing_filed_paths:
+            print(f"    - {p}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

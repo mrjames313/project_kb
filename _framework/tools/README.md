@@ -56,6 +56,36 @@ Implemented in commit 2a (errors only):
 
 Deferred for later commits: configurable warnings (Rule 4, 8, 9, 10, 11, 13, 14, 16) and Rule 18 (maintenance-category violations).
 
+### `pulse_compact.py` — wrap-up compaction
+
+Materializes pulse.log events into pulse.md and truncates the log. Regenerates the auto-derived sections (recent decisions, active concepts, recent findings) from current kb state; preserves human-edited sections (current focus, open questions) and updates them from log entries.
+
+```bash
+python _framework/tools/pulse_compact.py                  # compact all (commons + every area)
+python _framework/tools/pulse_compact.py areas/research   # compact one area
+```
+
+Idempotent: running with an empty log is a no-op. Exits non-zero if any pulse.md exceeds the line cap after compaction.
+
+### `promote.py` — proposal → commons
+
+Moves a page from `commons/_proposed/<slug>/page.md` to `commons/kb/<type>/<id>.md`, updating frontmatter (`area: commons`, `human_reviewed: false`, `promoted_from`, `promoted_on`) and writing a CHANGELOG entry. The proposal directory remains as audit trail (only `page.md` is moved).
+
+```bash
+python _framework/tools/promote.py 2026-05-shot-noise
+```
+
+Errors cleanly when the target already exists, the proposal is missing, or the frontmatter is invalid.
+
+### `manifest_validate.py` — single-manifest validator
+
+Focused inspector for a single data manifest. Same checks as lint Rule 12 (provenance, storage_uri, context_pages) but scoped to one file with prose output.
+
+```bash
+python _framework/tools/manifest_validate.py areas/research/data/manifests/m-2026-05-test.md
+python _framework/tools/manifest_validate.py areas/research/data/manifests/m-2026-05-test.md --json
+```
+
 ### `token_estimate.py` — preload token-cost estimator
 
 Estimates the token cost of loading a role's preload list (both full and frontmatter tiers). Used by `/budget` to identify heavy roles and by the telemetry layer to record per-session preload cost.

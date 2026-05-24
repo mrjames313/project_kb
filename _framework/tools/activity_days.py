@@ -124,10 +124,15 @@ def active_days_back(
     if n_active_days <= 0:
         raise ValueError("n_active_days must be positive")
 
-    output = _run_git(
-        ["log", "--all", "--pretty=format:%cs"],
-        cwd=repo_root,
-    )
+    try:
+        output = _run_git(
+            ["log", "--all", "--pretty=format:%cs"],
+            cwd=repo_root,
+        )
+    except GitError:
+        # Not a git repo, or no commits yet. We have no history to walk back
+        # through; treat that the same as "insufficient history".
+        return None
     # Distinct dates, sorted newest first
     dates = sorted({line.strip() for line in output.splitlines() if line.strip()}, reverse=True)
 
