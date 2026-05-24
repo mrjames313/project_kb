@@ -1,16 +1,9 @@
-# Framework configuration
-#
-# Capability state and lint visibility for this project.
-# Do not edit by hand — use the /framework skill to make changes.
-
 capabilities:
   multi_area: false
   por: false
   task_subagents: false
   formal_review: false
-
 lint:
-  # Thresholds (apply regardless of warning visibility)
   pulse_line_cap: 80
   stale_concept_threshold_active_days: 30
   promotion_freshness_active_days: 14
@@ -18,12 +11,7 @@ lint:
   exchange_stale_active_days: 7
   cross_area_link_threshold: 3
   recent_decisions_window_active_days: 7
-
-  # Threshold for suggesting that a shadow rule be enabled
   shadow_suggest_threshold: 5
-
-  # Which warning rules are visible.
-  # Disabled = run in shadow; trigger counts surface as suggestions.
   warnings_visible:
     rule_4_orphans: false
     rule_8_stale_concept: false
@@ -33,10 +21,6 @@ lint:
     rule_13_backlinker_freshness: false
     rule_14_exchange_staleness: false
     rule_16_cross_area_reads: false
-
 prune:
-  # Thresholds for /framework prune analysis (in active sessions).
-  # Full tier is stricter because bodies are expensive; frontmatter tier
-  # is cheaper to keep, so the threshold for stale-ness is higher.
   full_tier_stale_sessions: 10
   frontmatter_tier_stale_sessions: 30

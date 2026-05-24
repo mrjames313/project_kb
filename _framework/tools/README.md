@@ -56,6 +56,33 @@ Implemented in commit 2a (errors only):
 
 Deferred for later commits: configurable warnings (Rule 4, 8, 9, 10, 11, 13, 14, 16) and Rule 18 (maintenance-category violations).
 
+### `framework.py` — capability and lint visibility engine
+
+Enable/disable framework capabilities, manage lint warning visibility, and view current state. Used by the `/framework` skill.
+
+```bash
+python _framework/tools/framework.py                            # show full status
+python _framework/tools/framework.py status                     # same
+python _framework/tools/framework.py lint-status                # just lint visibility
+python _framework/tools/framework.py --dry-run enable por       # preview the plan
+python _framework/tools/framework.py enable multi_area          # apply
+python _framework/tools/framework.py disable formal_review      # disable
+python _framework/tools/framework.py enable-lint rule_4_orphans # show shadow rule
+python _framework/tools/framework.py disable-lint 4             # short form
+python _framework/tools/framework.py --json enable por          # machine-readable
+```
+
+What enable/disable does, depending on the capability:
+
+- **multi_area** — splices a section into CLAUDE.md; adds exchange-related boundaries and skills to every role file.
+- **por** — splices a section into CLAUDE.md; creates `commons/POR.md`, `areas/<area>/POR.md` for each existing area, and `commons/roles/coordinator/role.md`; adds POR entries to each role's preload (own area + parents for sub-areas).
+- **task_subagents** — splices a section into CLAUDE.md only (the behavior change is in `/implement`).
+- **formal_review** — splices a section into CLAUDE.md; creates a reviewer variant of each implementer role; adds `review` skill to implementer roles. Requires `task_subagents` to be enabled first.
+
+On disable, the CLAUDE.md section is removed, role file edits are reverted, and capability-specific files are deleted (coordinator role, reviewer roles). POR.md files persist on disk but become inert; the warning surfaces this. Disable is blocked if another enabled capability depends on the one being disabled (e.g., disabling `task_subagents` while `formal_review` is on).
+
+Exit codes: 0 OK, 1 plan error (e.g., unmet dependency, unknown capability), 2 apply error, 3 setup error.
+
 ### `pulse_compact.py` — wrap-up compaction
 
 Materializes pulse.log events into pulse.md and truncates the log. Regenerates the auto-derived sections (recent decisions, active concepts, recent findings) from current kb state; preserves human-edited sections (current focus, open questions) and updates them from log entries.
