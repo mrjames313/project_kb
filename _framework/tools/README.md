@@ -70,6 +70,9 @@ python _framework/tools/framework.py disable formal_review      # disable
 python _framework/tools/framework.py enable-lint rule_4_orphans # show shadow rule
 python _framework/tools/framework.py disable-lint 4             # short form
 python _framework/tools/framework.py --json enable por          # machine-readable
+python _framework/tools/framework.py prune                      # list stale preload entries
+python _framework/tools/framework.py prune researcher           # restrict to one role
+python _framework/tools/framework.py prune --apply              # apply removals
 ```
 
 What enable/disable does, depending on the capability:
@@ -80,6 +83,13 @@ What enable/disable does, depending on the capability:
 - **formal_review** — splices a section into CLAUDE.md; creates a reviewer variant of each implementer role; adds `review` skill to implementer roles. Requires `task_subagents` to be enabled first.
 
 On disable, the CLAUDE.md section is removed, role file edits are reverted, and capability-specific files are deleted (coordinator role, reviewer roles). POR.md files persist on disk but become inert; the warning surfaces this. Disable is blocked if another enabled capability depends on the one being disabled (e.g., disabling `task_subagents` while `formal_review` is on).
+
+`prune` finds preload entries that should be candidates for removal, on two signals:
+
+- **Lifecycle**: the target kb page has `status` in `{superseded, falsified, dropped}` — dead weight in any role's preload.
+- **Activity** (when enough telemetry exists): the entry has not been cited across the last N completed sessions for the role. Thresholds are in `config.yml` under `prune.full_tier_stale_sessions` (default 10) and `prune.frontmatter_tier_stale_sessions` (default 30). With fewer than N sessions of history, activity-based candidates are not produced.
+
+Entries inside `# capability: X` blocks are flagged for visibility but skipped on `--apply` — those are framework-managed and should be removed via `disable` instead.
 
 Exit codes: 0 OK, 1 plan error (e.g., unmet dependency, unknown capability), 2 apply error, 3 setup error.
 

@@ -40,6 +40,8 @@ from common import (  # noqa: E402
     load_config,
     parse_frontmatter,
 )
+from telemetry import iter_events  # noqa: E402
+from token_estimate import parse_role_preload  # noqa: E402
 
 
 # All capabilities the framework recognizes
@@ -869,6 +871,360 @@ def _normalize_lint_rule(rule: str) -> str:
     return rule
 
 
+# --- Prune (stale preload entry detection) ---
+
+# Statuses that make a kb page unfit to keep in a role's preload.
+DEAD_STATUSES = {"superseded", "falsified", "dropped"}
+
+
+@dataclass
+class PruneCandidate:
+    """One preload entry suggested for removal from a role file."""
+    role_file: str  # relative to repo root
+    role_name: str
+    preload_path: str  # the path or pattern as it appears in the role file
+    tier: str  # "full" or "frontmatter"
+    reason: str  # human-readable explanation
+    detail: dict = field(default_factory=dict)
+    in_capability_block: bool = False  # capability-managed; will be skipped on apply
+
+    def to_dict(self) -> dict:
+        return {
+            "role_file": self.role_file,
+            "role_name": self.role_name,
+            "preload_path": self.preload_path,
+            "tier": self.tier,
+            "reason": self.reason,
+            "detail": self.detail,
+            "in_capability_block": self.in_capability_block,
+        }
+
+
+def _gather_role_sessions(repo_root: Path, role_name: str, limit: int) -> list[dict]:
+    """
+    Return up to `limit` most-recent completed sessions for the given role.
+    A completed session has both a session_start and a session_end event.
+    """
+    starts: dict[str, dict] = {}
+    ends: dict[str, dict] = {}
+    for event in iter_events(repo_root):
+        sid = event.get("session_id")
+        if not sid:
+            continue
+        if event.get("event") == "session_start" and event.get("role") == role_name:
+            starts[sid] = event
+        elif event.get("event") == "session_end":
+            ends[sid] = event
+    paired = []
+    for sid, start in starts.items():
+        end = ends.get(sid)
+        if end is not None:
+            paired.append({"start": start, "end": end})
+    # Most recent first by session_id (which is timestamp-based)
+    paired.sort(key=lambda p: p["start"].get("session_id", ""), reverse=True)
+    return paired[:limit]
+
+
+def _normalize_path(path: str) -> str:
+    """Strip leading slash and trailing slash for canonical comparison."""
+    return path.strip().lstrip("/").rstrip("/")
+
+
+def _path_in_pattern(cited_path: str, pattern: str) -> bool:
+    """Check if a cited path falls within a directory pattern."""
+    cn = _normalize_path(cited_path)
+    pn = _normalize_path(pattern)
+    return cn == pn or cn.startswith(pn + "/")
+
+
+def _parse_role_preload_with_capability_markers(role_text: str) -> dict:
+    """
+    Parse a role file's preload sections, also marking which entries are inside
+    capability blocks (`# capability: X` … `# end capability: X`).
+
+    Returns:
+        {
+          "full": [{"path": str, "in_capability_block": bool, "capability": str|None}, ...],
+          "frontmatter": [{"path": str, "in_capability_block": bool, "capability": str|None}, ...],
+        }
+    """
+    out = {"full": [], "frontmatter": []}
+    current_section: str | None = None
+    current_capability: str | None = None
+
+    line_pat = re.compile(r"^\s*(?:\d+\.|-)\s+(.+?)\s*$")
+    for raw in role_text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("## "):
+            heading = line.lstrip("#").strip().lower()
+            if heading.startswith("preload context (full)"):
+                current_section = "full"
+            elif heading.startswith("preload context (frontmatter"):
+                current_section = "frontmatter"
+            else:
+                current_section = None
+            current_capability = None
+            continue
+        if current_section is None:
+            continue
+
+        stripped = line.strip()
+        cap_match = re.match(r"^#\s+capability:\s+(\S+)\s*$", stripped)
+        if cap_match:
+            current_capability = cap_match.group(1)
+            continue
+        if stripped.startswith("# end capability:"):
+            current_capability = None
+            continue
+
+        m = line_pat.match(line)
+        if not m:
+            continue
+        content = m.group(1)
+        # Strip trailing comment and backticks
+        content = re.sub(r"\s+#.*$", "", content).strip().strip("`")
+        if not content.startswith("/"):
+            continue
+        out[current_section].append({
+            "path": content.lstrip("/"),
+            "raw_line_path": content,  # preserves the leading slash for line matching
+            "in_capability_block": current_capability is not None,
+            "capability": current_capability,
+        })
+
+    return out
+
+
+def find_prune_candidates(
+    repo_root: Path,
+    config: dict,
+    *,
+    role_filter: str | None = None,
+) -> list[PruneCandidate]:
+    """
+    Identify preload entries that are stale or dead-weight across role files.
+
+    Two sources of staleness:
+      1. Lifecycle: target page exists and has status in {superseded, falsified, dropped}.
+      2. Activity: target path was not cited across the last N sessions for the role
+         (N from config.prune.{full_tier,frontmatter_tier}_stale_sessions).
+
+    role_filter (if given) restricts to role files whose `role` frontmatter matches.
+    """
+    prune_cfg = config.get("prune", {}) if isinstance(config, dict) else {}
+    full_threshold = int(prune_cfg.get("full_tier_stale_sessions", 10))
+    frontmatter_threshold = int(prune_cfg.get("frontmatter_tier_stale_sessions", 30))
+
+    candidates: list[PruneCandidate] = []
+
+    for role_path in iter_role_files(repo_root):
+        try:
+            role_text = role_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        try:
+            fm, _body = parse_frontmatter(role_text)
+        except Exception:  # noqa: BLE001
+            fm = None
+        role_name = (fm or {}).get("role", role_path.parent.name)
+
+        if role_filter and role_name != role_filter:
+            continue
+
+        rel_role = str(role_path.relative_to(repo_root))
+        preload = _parse_role_preload_with_capability_markers(role_text)
+
+        # --- Lifecycle-driven (full tier only — patterns don't have a status) ---
+        for entry in preload["full"]:
+            target = repo_root / entry["path"]
+            if not target.is_file():
+                continue  # missing files surface via token_estimate, not here
+            try:
+                target_fm, _ = parse_frontmatter(target.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            if target_fm and target_fm.get("status") in DEAD_STATUSES:
+                candidates.append(PruneCandidate(
+                    role_file=rel_role,
+                    role_name=role_name,
+                    preload_path=entry["raw_line_path"],
+                    tier="full",
+                    reason=f"target page has status {target_fm['status']!r}",
+                    detail={"page_status": target_fm["status"]},
+                    in_capability_block=entry["in_capability_block"],
+                ))
+
+        # --- Activity-driven (require enough session history) ---
+        sessions_full = _gather_role_sessions(repo_root, role_name, full_threshold)
+        sessions_fm = _gather_role_sessions(repo_root, role_name, frontmatter_threshold)
+
+        if len(sessions_full) >= full_threshold:
+            cited_paths: set[str] = set()
+            for s in sessions_full:
+                end = s.get("end") or {}
+                for p in end.get("pages_cited", []) or []:
+                    cited_paths.add(_normalize_path(p))
+            already_flagged = {c.preload_path for c in candidates if c.role_file == rel_role}
+            for entry in preload["full"]:
+                # Don't double-flag if already lifecycle-flagged
+                if entry["raw_line_path"] in already_flagged:
+                    continue
+                normalized = _normalize_path(entry["path"])
+                if normalized not in cited_paths:
+                    candidates.append(PruneCandidate(
+                        role_file=rel_role,
+                        role_name=role_name,
+                        preload_path=entry["raw_line_path"],
+                        tier="full",
+                        reason=f"not cited in last {full_threshold} sessions",
+                        detail={"sessions_examined": len(sessions_full)},
+                        in_capability_block=entry["in_capability_block"],
+                    ))
+
+        if len(sessions_fm) >= frontmatter_threshold:
+            cited_paths_fm: set[str] = set()
+            for s in sessions_fm:
+                end = s.get("end") or {}
+                for p in end.get("pages_cited", []) or []:
+                    cited_paths_fm.add(_normalize_path(p))
+            for entry in preload["frontmatter"]:
+                used = any(_path_in_pattern(cited, entry["path"]) for cited in cited_paths_fm)
+                if not used:
+                    candidates.append(PruneCandidate(
+                        role_file=rel_role,
+                        role_name=role_name,
+                        preload_path=entry["raw_line_path"],
+                        tier="frontmatter",
+                        reason=f"no pages under this pattern cited in last {frontmatter_threshold} sessions",
+                        detail={"sessions_examined": len(sessions_fm)},
+                        in_capability_block=entry["in_capability_block"],
+                    ))
+
+    return candidates
+
+
+def _remove_preload_line(role_text: str, target_path: str, *, tier: str) -> tuple[str, bool]:
+    """
+    Remove the first preload list-item that matches `target_path` from the appropriate
+    section. Skips lines inside `# capability:` blocks. Returns (new_text, removed).
+    """
+    section_heading = (
+        "preload context (full)" if tier == "full" else "preload context (frontmatter only)"
+    )
+    target_norm = _normalize_path(target_path)
+    line_pat = re.compile(r"^(\s*)(?:\d+\.|-)\s+(.+?)\s*$")
+
+    lines = role_text.splitlines()
+    result: list[str] = []
+    in_section = False
+    in_capability_block = False
+    removed = False
+
+    for line in lines:
+        if line.startswith("## "):
+            heading = line.lstrip("#").strip().lower()
+            in_section = heading.startswith(section_heading)
+            in_capability_block = False
+            result.append(line)
+            continue
+        stripped = line.strip()
+        if stripped.startswith("# capability:"):
+            in_capability_block = True
+            result.append(line)
+            continue
+        if stripped.startswith("# end capability:"):
+            in_capability_block = False
+            result.append(line)
+            continue
+
+        if removed or not in_section or in_capability_block:
+            result.append(line)
+            continue
+
+        m = line_pat.match(line)
+        if not m:
+            result.append(line)
+            continue
+        content = m.group(2)
+        content = re.sub(r"\s+#.*$", "", content).strip().strip("`")
+        if not content.startswith("/"):
+            result.append(line)
+            continue
+        if _normalize_path(content) == target_norm:
+            removed = True
+            continue  # skip this line
+        result.append(line)
+
+    new_text = "\n".join(result)
+    if role_text.endswith("\n") and not new_text.endswith("\n"):
+        new_text += "\n"
+    return new_text, removed
+
+
+def plan_prune(
+    candidates: list[PruneCandidate], repo_root: Path
+) -> Plan:
+    """Build a plan to apply the given prune candidates (one role file at a time)."""
+    plan = Plan(operation=f"prune ({len(candidates)} candidates)")
+
+    # Group by role_file
+    by_role: dict[str, list[PruneCandidate]] = {}
+    for c in candidates:
+        if c.in_capability_block:
+            plan.warnings.append(
+                f"skipping {c.role_file}::{c.preload_path}: managed by `{c.detail.get('capability') or '#'}` "
+                f"capability marker — use `/framework disable` instead"
+            )
+            continue
+        by_role.setdefault(c.role_file, []).append(c)
+
+    for rel, group in by_role.items():
+        path = repo_root / rel
+        if not path.is_file():
+            plan.warnings.append(f"role file missing: {rel}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        original = text
+        applied = []
+        for c in group:
+            text, removed = _remove_preload_line(text, c.preload_path, tier=c.tier)
+            if removed:
+                applied.append(c.preload_path)
+            else:
+                plan.warnings.append(
+                    f"could not find {c.preload_path} in {rel} (already removed?)"
+                )
+        if text != original:
+            plan.changes.append(Change(
+                kind="edit",
+                path=rel,
+                description=f"Remove {len(applied)} preload entries: {', '.join(applied)}",
+                new_content=text,
+            ))
+
+    return plan
+
+
+def format_prune_candidates(candidates: list[PruneCandidate]) -> str:
+    """Human-readable display of prune candidates, grouped by role."""
+    if not candidates:
+        return "No prune candidates."
+
+    by_role: dict[str, list[PruneCandidate]] = {}
+    for c in candidates:
+        by_role.setdefault(f"{c.role_name} ({c.role_file})", []).append(c)
+
+    lines = [f"Prune candidates across {len(by_role)} role(s):", ""]
+    for role_key, group in sorted(by_role.items()):
+        lines.append(f"  {role_key}")
+        for c in group:
+            marker = "  [capability-managed]" if c.in_capability_block else ""
+            lines.append(f"    [{c.tier}] {c.preload_path}{marker}")
+            lines.append(f"       reason: {c.reason}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 # --- Status ---
 
 def status(repo_root: Path, config: dict) -> dict:
@@ -930,6 +1286,10 @@ def main() -> int:
     p_disable_lint = sub.add_parser("disable-lint", help="shadow a previously visible lint warning")
     p_disable_lint.add_argument("rule")
 
+    p_prune = sub.add_parser("prune", help="list/apply prune candidates for role preloads")
+    p_prune.add_argument("role", nargs="?", help="restrict to this role name")
+    p_prune.add_argument("--apply", action="store_true", help="apply the suggested removals")
+
     sub.add_parser("lint-status", help="show lint visibility status")
     sub.add_parser("status", help="show current capability + lint state")
 
@@ -978,6 +1338,17 @@ def main() -> int:
         plan = plan_enable_lint(args.rule, repo_root, config)
     elif args.cmd == "disable-lint":
         plan = plan_disable_lint(args.rule, repo_root, config)
+    elif args.cmd == "prune":
+        candidates = find_prune_candidates(repo_root, config, role_filter=args.role)
+        if not args.apply:
+            # Just list candidates
+            if args.json:
+                print(json.dumps([c.to_dict() for c in candidates], indent=2))
+            else:
+                print(format_prune_candidates(candidates))
+            return 0
+        # Apply the prunes
+        plan = plan_prune(candidates, repo_root)
     else:
         print(f"framework: unknown command: {args.cmd}", file=sys.stderr)
         return 3
