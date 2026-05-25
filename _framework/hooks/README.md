@@ -16,33 +16,65 @@ All three scripts are best-effort. They never fail the session — any error is 
 
 ## Installation in Claude Code
 
-Hooks are wired up in your Claude Code settings. The exact location depends on how you've installed Claude Code; the common path is `.claude/settings.json` in your project root (or `~/.claude/settings.json` for user-wide):
+Hooks are wired up in your Claude Code settings. The standard locations:
+
+- `.claude/settings.json` — committed to the repo; shared with collaborators (**use this**).
+- `.claude/settings.local.json` — gitignored; for your own machine.
+- `~/.claude/settings.json` — user-wide; applies to all your projects.
+
+The framework ships with `.claude/settings.json` already configured at the repo root, so the hooks should be active after you clone. The file contains:
 
 ```json
 {
   "hooks": {
-    "SessionStart": ".venv/bin/bash _framework/hooks/session-start.sh",
-    "SessionEnd": ".venv/bin/bash _framework/hooks/session-end.sh",
-    "PreCompact": ".venv/bin/bash _framework/hooks/pre-compact.sh"
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/_framework/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/_framework/hooks/session-end.sh"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/_framework/hooks/pre-compact.sh"
+          }
+        ]
+      }
+    ]
   }
 }
 ```
 
-If you don't have `.venv/bin/bash` (most systems won't — venvs don't ship shells), use plain `bash`:
+A few details about this format:
 
-```json
-{
-  "hooks": {
-    "SessionStart": "bash _framework/hooks/session-start.sh",
-    "SessionEnd": "bash _framework/hooks/session-end.sh",
-    "PreCompact": "bash _framework/hooks/pre-compact.sh"
-  }
-}
-```
+- The outer key (`SessionStart` etc.) is the **event** name.
+- Each event holds an array of **matcher groups**. We omit `matcher` to fire on every occurrence.
+- Each matcher group holds a `hooks` array of **handlers**. A handler has a `type` and (for shell hooks) a `command`.
+- `$CLAUDE_PROJECT_DIR` is a placeholder Claude Code substitutes with your project root, so the same settings file works regardless of cwd.
 
-The scripts find your repo root by walking up from their own location, so they don't depend on the cwd Claude Code invokes them with.
+To verify the hooks are active, run `/hooks` inside Claude Code — it opens a read-only browser showing all configured hooks and where each one came from.
 
-For the Python invocations inside session-end.sh and pre-compact.sh, the scripts prefer `.venv/bin/python` (project venv) and fall back to `python3` then `python`. If you've installed framework dependencies system-wide with `--break-system-packages`, the `python3`/`python` fallback picks them up.
+## Disabling hooks
+
+To stop a specific hook firing, comment it out or delete its entry in `.claude/settings.json`. To temporarily disable all hooks without editing settings, set `"disableAllHooks": true` at the top level of the settings file.
+
+If you're using `.claude/settings.local.json` for personal overrides, you can add a disabled hook entry there to override the project-level config.
 
 ## Testing the hooks manually
 
