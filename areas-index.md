@@ -6,7 +6,3 @@ _Last regenerated: 2026-05-24_
 ## commons/
 
 _(commons brief not yet populated)_
-
-#### areas/research/
-Roles:
-- **researcher** — Research role
