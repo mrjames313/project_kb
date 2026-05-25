@@ -1,0 +1,86 @@
+# Hooks
+
+Three shell scripts that Claude Code can invoke at session lifecycle events. They keep the framework's on-disk state consistent across sessions — particularly the pulse log → pulse.md compaction.
+
+The hooks are optional. Skills do everything they need to do (`/start` loads orientation, `/wrap-up` compacts pulse, runs lint, records telemetry). Hooks add belt-and-suspenders: orientation files surface automatically at the start of a session, and pulse state is preserved even when an agent exits without invoking `/wrap-up`.
+
+## The scripts
+
+| Hook | Fires when | What it does |
+|---|---|---|
+| `session-start.sh` | A Claude Code session begins | Prints CLAUDE.md, areas-index.md, and INBOX.md to stdout so the agent has the project shape in context. Warns about uncompacted pulse logs from a prior session and notes any orphan telemetry session marker. |
+| `session-end.sh` | A Claude Code session ends | If pulse logs are non-empty, runs `pulse_compact.py`. If a telemetry session marker exists, records a `session_end` event (with no citation/load data — the agent isn't around to ask). |
+| `pre-compact.sh` | Before Claude Code compacts the conversation context | Same as session-end except it doesn't record a session_end event (the session is still going). Flushes pulse to disk so it survives compaction. |
+
+All three scripts are best-effort. They never fail the session — any error is logged to stderr and ignored.
+
+## Installation in Claude Code
+
+Hooks are wired up in your Claude Code settings. The exact location depends on how you've installed Claude Code; the common path is `.claude/settings.json` in your project root (or `~/.claude/settings.json` for user-wide):
+
+```json
+{
+  "hooks": {
+    "SessionStart": ".venv/bin/bash _framework/hooks/session-start.sh",
+    "SessionEnd": ".venv/bin/bash _framework/hooks/session-end.sh",
+    "PreCompact": ".venv/bin/bash _framework/hooks/pre-compact.sh"
+  }
+}
+```
+
+If you don't have `.venv/bin/bash` (most systems won't — venvs don't ship shells), use plain `bash`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": "bash _framework/hooks/session-start.sh",
+    "SessionEnd": "bash _framework/hooks/session-end.sh",
+    "PreCompact": "bash _framework/hooks/pre-compact.sh"
+  }
+}
+```
+
+The scripts find your repo root by walking up from their own location, so they don't depend on the cwd Claude Code invokes them with.
+
+For the Python invocations inside session-end.sh and pre-compact.sh, the scripts prefer `.venv/bin/python` (project venv) and fall back to `python3` then `python`. If you've installed framework dependencies system-wide with `--break-system-packages`, the `python3`/`python` fallback picks them up.
+
+## Testing the hooks manually
+
+You can run any hook directly to see what it does:
+
+```bash
+bash _framework/hooks/session-start.sh
+bash _framework/hooks/session-end.sh
+bash _framework/hooks/pre-compact.sh
+```
+
+`session-start.sh` is the chatty one — it dumps the three orientation files plus a state summary. The others are nearly silent unless they have actual work to do (compacting a non-empty pulse log).
+
+## Making them executable
+
+If your filesystem stores executable bits and Claude Code invokes scripts directly (without `bash` prefix), you may need:
+
+```bash
+chmod +x _framework/hooks/*.sh
+```
+
+If you're invoking via `bash <script>` in your settings.json (as shown above), this isn't necessary.
+
+## Customization
+
+The hooks are short — ~50–80 lines each. Edit them freely. Common adjustments:
+
+- **Skip the INBOX.md surfacing in session-start** if you find it noisy: comment out the INBOX.md block.
+- **Skip auto-compaction in session-end** if you want every session to require explicit `/wrap-up`: comment out the `pulse_compact.py` invocation.
+- **Add area-specific surfacing** in session-start: e.g., cat `commons/POR.md` automatically if `por` is enabled.
+
+The hooks intentionally don't read `_framework/config.yml`; they do the same thing regardless of which capabilities are on. If you want conditional behavior, add a Python helper or just edit the hook directly.
+
+## What hooks deliberately don't do
+
+- **Adopt a role.** The `/start` skill does that. Hooks just stage context for the skill.
+- **Record `session_start` telemetry.** The agent does that when it adopts a role — the hook can't know which role yet.
+- **Track citations.** Only the agent knows what it cited; hooks fire when no agent is in conversation.
+- **Invoke skills.** Skills are agent-facing — they require an agent to interpret them. Hooks can call deterministic tools (`pulse_compact.py`, `telemetry.py`) but not `/wrap-up`.
+
+In other words: the hooks deal with on-disk state. The skills deal with agent state. The two layers don't overlap.
