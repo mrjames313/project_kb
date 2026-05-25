@@ -1,0 +1,113 @@
+---
+name: add-area
+description: Create a new area scaffold under areas/<name>/ with brief.md, pulse.md, kb subdirectories, and at least one role. Updates areas-index.md on the next lint run.
+---
+
+# /add-area
+
+Creates a new area scaffold under `areas/<name>/`. An area is the framework's primary unit of specialization — each area has its own kb, roles, raw materials, specs, and (optionally) code/data.
+
+## When to use
+
+- The user wants to organize a new specialty or workstream that doesn't fit into existing areas.
+- Cross-area work has become heavy enough that the new domain deserves its own area.
+- A `/plan` or `/implement` revealed that some work belongs in an area that doesn't exist yet.
+
+Don't add an area for:
+- Single one-off tasks (use a spec in an existing area).
+- A topic that overlaps heavily with an existing area (extend that area instead).
+
+## Steps
+
+1. **Confirm the area name and shape.** Ask the user:
+   - **Name** — a short slug (e.g. `optics`, `business-model`, `frontend`). Will become the directory name and the `area:` value in frontmatter.
+   - **Sub-area or top-level?** If sub-area, where does it nest (e.g. `research/optics`)?
+   - **Initial role(s)** — at least one. Common pattern: one implementer role (`researcher`, `engineer`, `designer`) per area.
+   - **Brief content** — 2–4 sentences on the area's purpose. Save asking for this until last; the user often firms up the brief as they answer the other questions.
+
+2. **Create the directory structure.** Under `areas/<area-path>/`:
+   ```
+   brief.md              — area description
+   pulse.md              — current focus, recent decisions, etc. (template)
+   _journal/
+     pulse.log           — empty
+   kb/
+     sources/
+     concepts/
+     findings/
+     decisions/
+   specs/                — empty (specs created via /plan)
+   code/                 — empty (created as needed by /implement)
+   data/
+     manifests/          — empty
+   raw/                  — empty (populated by /ingest)
+   roles/
+     <role-name>/
+       role.md           — initial role file
+   ```
+
+   Use the templates in `_framework/schema/`:
+   - `frontmatter.md` and `role-template.md` for the role file structure.
+   - The existing `commons/brief.md` and `commons/pulse.md` as references for those files' structure.
+
+3. **Populate `brief.md`** with the user's description. Frontmatter is not required for `brief.md` — it's a free-form document.
+
+4. **Populate `pulse.md`** with a starter template:
+   ```markdown
+   # <area> — pulse
+
+   _Initialized: YYYY-MM-DD_
+
+   ## Current focus
+
+   _(set when work begins)_
+
+   ## Recent decisions (last 7 active days)
+
+   _None yet._
+
+   ## Active concepts under test
+
+   _None yet._
+
+   ## Open questions
+
+   _None yet._
+
+   ## Recent findings (last 5)
+
+   _None yet._
+   ```
+
+5. **Create at least one role file** under `areas/<area-path>/roles/<role-name>/role.md`. Use the template at `_framework/schema/role-template.md`. Adjust:
+   - Frontmatter: `role`, `area`, `summary`.
+   - "Preload context (full)" — start with CLAUDE.md, schema docs, the new area's brief and pulse, and `areas-index.md`. Keep it minimal initially; expand as needed.
+   - "Preload context (frontmatter only)" — patterns like `/areas/<area-path>/kb/` to surface area kb pages.
+   - "Operating boundaries" — `Writes allowed: /areas/<area-path>/** except /areas/<area-path>/raw/**`.
+   - "Allowed skills" — at minimum `start, ingest, ask, plan, implement, replan, wrap-up, check`. Add capability-conditional skills via `/framework enable`.
+
+6. **If `por` is enabled**: also create `areas/<area-path>/POR.md` (use the template the `por` capability generates — see `_framework/tools/framework.py` `_plan_por` or just copy `commons/POR.md` structure). Without this step, lint won't fail but the role won't have a POR to load.
+
+7. **Verify.** Run:
+   ```
+   python _framework/tools/lint.py
+   ```
+   Lint regenerates `areas-index.md` on this run, so the new area appears there automatically. The new role file should be lint-clean (frontmatter complete; no broken wikilinks).
+
+8. **Record in pulse.log.** Append to `commons/_journal/pulse.log`:
+   ```
+   ## [YYYY-MM-DD HH:MM] decision <role>
+   Created new area: <area-path>. Initial role: <role-name>.
+   → to be filed: decisions/d-YYYY-MM-DD-add-area-<slug>
+   ```
+   Create the corresponding decision page documenting why the area was created and what scope it covers.
+
+9. **Brief the user.** Tell them the area is ready and what to do next: `/start <role-name>` to adopt the new role, then `/plan` to scope the first piece of work.
+
+## Notes
+
+- **Sub-areas nest naturally.** `areas/research/optics/` is a sub-area of `areas/research/`. A role in `optics/` would typically preload both `/areas/research/brief.md` and `/areas/research/optics/brief.md` so it inherits parent context. Use `/areas/research/kb/` and `/areas/research/optics/kb/` together as frontmatter-only patterns.
+- **Initial role files can be light.** Don't try to specify everything up front. The role file is meant to be revised as the area's work surface clarifies. `/framework prune` will surface stale entries later.
+- **Roles can share preload entries**, but each role is independent. Don't try to "inherit" — duplicate the entries instead. The framework deliberately favors explicitness over reuse here.
+- **For `multi_area` enabled projects**: the new area is automatically eligible for `/exchange` once `multi_area` is on. No further setup needed.
+- **For `formal_review` enabled projects**: after creating implementer role(s), run `/framework disable formal_review && /framework enable formal_review` to regenerate the reviewer variants including the new role. (Or manually create a `<role-name>-reviewer/role.md` mirror.)
