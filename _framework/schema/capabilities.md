@@ -16,7 +16,7 @@ Each capability section below describes:
 
 ## Skill activation
 
-All sixteen skills ship with the template in `_framework/skills/`. Capability gating controls **activation state**, not file presence:
+All sixteen skills ship with the template in `.claude/skills/`. Capability gating controls **activation state**, not file presence:
 
 - The `framework` skill maintains a registry of currently-active skills.
 - Capability-gated skills are present on disk but not active until their capability is enabled.

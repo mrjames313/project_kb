@@ -32,7 +32,10 @@ desktop.ini
 # Telemetry is per-clone, not committed
 _framework/telemetry/
 
-# Claude Code settings: keep settings.json (project hooks config) but
-# ignore per-machine local overrides and session state.
+# Claude Code settings: keep settings.json (project hooks config) and
+# skills/ (the framework's skills) but ignore per-machine local overrides
+# and session state.
 .claude/*
 !.claude/settings.json
+!.claude/skills/
+!.claude/skills/**

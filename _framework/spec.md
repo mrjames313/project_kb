@@ -57,19 +57,6 @@ project-root/
 │   │   ├── manifest_validate.py
 │   │   ├── activity_days.py
 │   │   └── framework.py
-│   ├── skills/                        # claude code agent skills
-│   │   ├── framework/SKILL.md
-│   │   ├── start/SKILL.md
-│   │   ├── ingest/SKILL.md
-│   │   ├── ask/SKILL.md
-│   │   ├── plan/SKILL.md
-│   │   ├── implement/SKILL.md
-│   │   ├── replan/SKILL.md
-│   │   ├── wrap-up/SKILL.md
-│   │   ├── check/SKILL.md
-│   │   ├── propose-promotion/SKILL.md
-│   │   ├── promote/SKILL.md
-│   │   └── (capability-gated skills, see section 15)
 │   └── hooks/
 │       ├── session-start.sh
 │       ├── pre-compact.sh
@@ -118,8 +105,21 @@ project-root/
 │       ├── index.md
 │       └── q-*.md
 │
-└── .claude/
-    └── settings.json                  # hooks wired here
+└── .claude/                           # claude code config (committed)
+    ├── settings.json                  # hooks wired here
+    └── skills/                        # agent skills
+        ├── framework/SKILL.md
+        ├── start/SKILL.md
+        ├── ingest/SKILL.md
+        ├── ask/SKILL.md
+        ├── plan/SKILL.md
+        ├── implement/SKILL.md
+        ├── replan/SKILL.md
+        ├── wrap-up/SKILL.md
+        ├── check/SKILL.md
+        ├── propose-promotion/SKILL.md
+        ├── promote/SKILL.md
+        └── (capability-gated skills, see section 15)
 ```
 
 **Underscore convention.** A single `_framework/` directory holds all infrastructure. Project content has no underscore prefix (`commons`, `areas`, `roles`, `specs`, `kb`, `raw`, `code`, `data`, `exchanges`). Two exceptions: `_proposed/` inside `commons/` (workflow artifact; "do not write directly") and `_journal/` per area (transient working records; written through skills, not by hand).
@@ -143,8 +143,9 @@ Mapping:
 | Path | Category |
 |---|---|
 | `README.md`, `CLAUDE.md` | H |
-| `_framework/**` (schema, tools, skills, hooks, spec.md) | H |
+| `_framework/**` (schema, tools, hooks, spec.md) | H |
 | `_framework/config.yml` | A (managed by `/framework` skill) |
+| `.claude/settings.json`, `.claude/skills/**` | H |
 | `commons/brief.md`, `areas/**/brief.md` | H |
 | `commons/roles/**/role.md`, `areas/**/roles/**/role.md` | H |
 | `exchanges/**/OWNERS`, `exchanges/**/README.md` | H |
@@ -995,7 +996,7 @@ Manifests link bidirectionally with kb. Lint enforces both directions.
 
 2. Write `lint.py`, `pulse_compact.py`, `promote.py`, `framework.py`, `activity_days.py`, `token_estimate.py`, and `telemetry.py` as deterministic Python.
 
-3. Write the always-available skills as `_framework/skills/<name>/SKILL.md` with explicit trigger language. Write the capability-gated skills too — all skills ship with the template; the `framework` skill manages activation state via `config.yml`.
+3. Write the always-available skills as `.claude/skills/<name>/SKILL.md` with explicit trigger language. Write the capability-gated skills too — all skills ship with the template; the `framework` skill manages activation state via `config.yml`.
 
 4. Write `_framework/schema/capabilities.md` and the four snippet files in `_framework/schema/claude-snippets/` (one per capability) declaratively describing what each enable/disable operation does.
 
