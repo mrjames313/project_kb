@@ -165,6 +165,112 @@ class TestUpdateOpenQuestions:
         assert any("First question?" in line for line in result)
         assert not any("_None yet._" in line for line in result)
 
+    def test_question_closed_removes_existing(self) -> None:
+        """A question-closed entry with a → closes: directive removes the matching question."""
+        existing = [
+            "## Open questions", "",
+            "- Does Rule 152 apply here?",
+            "- Should we file under 506(d)?",
+            "- Something unrelated?",
+            "",
+        ]
+        log_entries = [
+            LogEntry(
+                "2026-05-08 09:00", "question-closed", "r",
+                "Rule 152 confirmed not applicable", None,
+                closes_questions=["Does Rule 152 apply here?"],
+            ),
+        ]
+        result = update_open_questions(existing, log_entries)
+        assert not any("Rule 152" in line for line in result)
+        assert any("506(d)" in line for line in result)  # untouched
+        assert any("Something unrelated?" in line for line in result)
+
+    def test_question_closed_matches_case_insensitive_and_punctuation(self) -> None:
+        """Closure matching is robust to case and trailing punctuation."""
+        existing = ["## Open questions", "", "- Does Rule 152 apply here?", ""]
+        log_entries = [
+            LogEntry(
+                "2026-05-08 09:00", "question-closed", "r", "resolved", None,
+                closes_questions=["does rule 152 apply here"],  # different case, no question mark
+            ),
+        ]
+        result = update_open_questions(existing, log_entries)
+        assert not any("Rule 152" in line for line in result)
+
+    def test_question_closed_multiple_targets(self) -> None:
+        """One question-closed entry can close multiple questions."""
+        existing = [
+            "## Open questions", "",
+            "- Question A?",
+            "- Question B?",
+            "- Question C?",
+            "",
+        ]
+        log_entries = [
+            LogEntry(
+                "2026-05-08 09:00", "question-closed", "r", "two resolved at once", None,
+                closes_questions=["Question A?", "Question B?"],
+            ),
+        ]
+        result = update_open_questions(existing, log_entries)
+        assert not any("Question A?" in line for line in result)
+        assert not any("Question B?" in line for line in result)
+        assert any("Question C?" in line for line in result)
+
+    def test_question_and_closure_same_session(self) -> None:
+        """A question asked AND closed within the same session never appears in pulse.md."""
+        existing = ["## Open questions", "", "_None yet._", ""]
+        log_entries = [
+            LogEntry("2026-05-08 09:00", "question", "r", "Transient question?", None),
+            LogEntry(
+                "2026-05-08 11:00", "question-closed", "r", "Quickly resolved", None,
+                closes_questions=["Transient question?"],
+            ),
+        ]
+        result = update_open_questions(existing, log_entries)
+        assert not any("Transient question?" in line for line in result)
+
+    def test_closure_with_no_matching_question_is_noop(self) -> None:
+        """A closes directive targeting nothing in pulse.md silently passes."""
+        existing = ["## Open questions", "", "- Real question?", ""]
+        log_entries = [
+            LogEntry(
+                "2026-05-08 09:00", "question-closed", "r", "tried to close phantom", None,
+                closes_questions=["Question that was never recorded?"],
+            ),
+        ]
+        result = update_open_questions(existing, log_entries)
+        # Real question still there
+        assert any("Real question?" in line for line in result)
+
+
+class TestParsePulseLogClosesDirective:
+    """Tests for parsing the → closes: directive in question-closed entries."""
+
+    def test_single_closes_directive(self) -> None:
+        log = textwrap.dedent("""
+            ## [2026-05-08 14:00] question-closed researcher
+            Rule 152 confirmed not applicable based on 2024 amendment.
+            → closes: Does Rule 152 apply here?
+        """).strip()
+        entries = parse_pulse_log(log)
+        assert len(entries) == 1
+        assert entries[0].event_type == "question-closed"
+        assert entries[0].closes_questions == ["Does Rule 152 apply here?"]
+        # The closes directive should NOT appear in the description
+        assert "→ closes:" not in entries[0].description
+
+    def test_multiple_closes_directives(self) -> None:
+        log = textwrap.dedent("""
+            ## [2026-05-08 14:00] question-closed researcher
+            One decision retired two related questions.
+            → closes: First question?
+            → closes: Second question?
+        """).strip()
+        entries = parse_pulse_log(log)
+        assert entries[0].closes_questions == ["First question?", "Second question?"]
+
 
 # --- compact_area ---
 

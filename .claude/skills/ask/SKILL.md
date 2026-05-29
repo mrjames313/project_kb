@@ -22,7 +22,8 @@ If the user wants to act on what they learn (e.g. write something, run an experi
 2. **Search the kb.** For each candidate area:
    - Scan `kb/index.md` for an overview (the lint regenerates this).
    - Read frontmatter blocks of pages whose `relevant_to` tags match the question's keywords.
-   - For promising hits, read the full page body.
+   - For promising hits, check `when_to_load` (if present) before loading the body. The field tells you whether the body is worth the token cost for *this* task — it commonly names a cheaper alternative ("the underlying findings cover the regulatory mechanics; this page is the playbook spine") or scopes what the page does and doesn't contain. If `when_to_load` suggests skipping for this task's shape, follow that and look at the named alternative instead.
+   - Then read the full body for the pages that survive the filter.
 
 3. **Synthesize an answer.** Combine what you found. Be explicit about:
    - What is established (findings with status `active`).

@@ -40,6 +40,9 @@ Brings external materials into the framework as immutable raw files plus source 
    relevant_to:
      - <tag1>
      - <tag2>
+   when_to_load: |
+     <optional. when should an agent load THIS body vs. cite a derived finding?
+     skip the field if there's no useful "don't load" signal.>
    provenance:
      kind: external | internal-experiment | internal-notes
      retrieved: 2026-05-15

@@ -7,8 +7,10 @@ For each area (and commons) with a _journal/pulse.log:
 2. Verify any '→ to be filed:' references resolve to existing kb pages
    (warn if not — the agent should have created the page during the session).
 3. Update pulse.md:
-   - Preserved sections: "Current focus" and "Open questions" — updated from
-     focus-shift and question log entries.
+   - Preserved sections: "Current focus" and "Open questions". Current focus
+     gets overwritten by the most recent focus-shift entry. Open questions are
+     extended by new `question` entries and pruned by `question-closed` entries
+     (which name the questions they retire via `→ closes:` directives).
    - Regenerated sections: "Recent decisions", "Active concepts under test",
      "Recent findings" — rebuilt from the current kb state, scoped to the area.
 4. Verify the compacted pulse.md is under the line cap.
@@ -47,15 +49,17 @@ _LOG_HEADING_RE = re.compile(
     r"^##\s+\[(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\]\s+(?P<event>\S+)(?:\s+(?P<role>.+))?$"
 )
 _FILED_RE = re.compile(r"^→\s+to be filed:\s+(?P<path>\S+)\s*$")
+_CLOSES_RE = re.compile(r"^→\s+closes:\s+(?P<text>.+?)\s*$")
 
 
 @dataclass
 class LogEntry:
     timestamp: str  # "YYYY-MM-DD HH:MM"
-    event_type: str  # decision | finding | concept | focus-shift | question
+    event_type: str  # decision | finding | concept | focus-shift | question | question-closed
     role: str | None
-    description: str  # everything between the heading and the `→ to be filed:` (if any)
+    description: str  # everything between the heading and any → directives
     filed_path: str | None  # e.g., "decisions/d-2026-05-04-bias-current"
+    closes_questions: list[str] = field(default_factory=list)  # for question-closed entries
 
 
 def parse_pulse_log(log_text: str) -> list[LogEntry]:
@@ -90,6 +94,11 @@ def parse_pulse_log(log_text: str) -> list[LogEntry]:
         filed_match = _FILED_RE.match(line)
         if filed_match:
             current.filed_path = filed_match.group("path").strip()
+            continue
+
+        closes_match = _CLOSES_RE.match(line)
+        if closes_match:
+            current.closes_questions.append(closes_match.group("text").strip())
             continue
 
         description_lines.append(line)
@@ -250,10 +259,20 @@ def update_current_focus(existing_section: list[str], log_entries: list[LogEntry
     return ["## Current focus", "", description, ""]
 
 
+def _normalize_question(text: str) -> str:
+    """Normalize question text for matching: lowercase, collapse whitespace, strip terminal punctuation."""
+    text = " ".join(text.lower().split())
+    return text.rstrip(".?!")
+
+
 def update_open_questions(existing_section: list[str], log_entries: list[LogEntry]) -> list[str]:
     """
-    Append new questions from log entries to the "Open questions" section,
-    deduplicating against existing questions.
+    Update the "Open questions" section:
+    - Add new questions from `question` log entries (deduplicated).
+    - Remove questions matching any `→ closes:` directive in `question-closed` entries.
+
+    Matching is done on normalized text (lowercase, collapsed whitespace,
+    stripped terminal punctuation) so minor formatting differences don't break it.
     """
     existing_questions: list[str] = []
     capture = False
@@ -266,14 +285,28 @@ def update_open_questions(existing_section: list[str], log_entries: list[LogEntr
         if line.strip().startswith("-"):
             existing_questions.append(line.strip()[1:].strip())
 
-    existing_lower = {q.lower() for q in existing_questions}
+    # Build the set of normalized targets to close
+    closes_targets: set[str] = set()
+    for e in log_entries:
+        if e.event_type == "question-closed":
+            for target in e.closes_questions:
+                closes_targets.add(_normalize_question(target))
 
+    # Apply closures to existing questions
+    existing_questions = [
+        q for q in existing_questions if _normalize_question(q) not in closes_targets
+    ]
+
+    # Add new questions from log, dedup against current set + closes targets
+    current_norm = {_normalize_question(q) for q in existing_questions}
     for e in log_entries:
         if e.event_type == "question":
             q = e.description.strip()
-            if q and q.lower() not in existing_lower:
-                existing_questions.append(q)
-                existing_lower.add(q.lower())
+            qn = _normalize_question(q)
+            if not q or qn in current_norm or qn in closes_targets:
+                continue
+            existing_questions.append(q)
+            current_norm.add(qn)
 
     lines = ["## Open questions", ""]
     if not existing_questions:

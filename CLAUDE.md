@@ -67,7 +67,9 @@ A role's preload list has two tiers:
 - **Full preload** — small, curated; bodies loaded.
 - **Frontmatter preload** — broad; only frontmatter blocks loaded (directory patterns).
 
-The `start` skill loads both at session start. During work, when evaluating whether to load additional pages: read frontmatter first (`summary`, `type`, `status`, `relevant_to` — visible in the frontmatter preload or in `kb/index.md`). Load the full body only when the page is materially relevant to the task, when you intend to cite or build on its content, or when frontmatter indicates ambiguity worth resolving.
+The `start` skill loads both at session start. During work, when evaluating whether to load additional pages: read frontmatter first (`summary`, `type`, `status`, `relevant_to`, and `when_to_load` if present — visible in the frontmatter preload or in `kb/index.md`). Load the full body only when the page is materially relevant to the task, when you intend to cite or build on its content, or when frontmatter indicates ambiguity worth resolving.
+
+`when_to_load` is a page-authored hint about task fit — where `summary` describes what the page contains, `when_to_load` describes when a given task makes the body worth opening (and often when to skip it for a cheaper alternative). Respect it when present; treat its absence as "fall back to summary + relevant_to."
 
 **Be intentional about what you load.** Many bodies is rarely justified; many frontmatter blocks usually is. See `_framework/schema/index-format.md` for `kb/index.md`, which agents reach for to discover pages outside their preload.
 
@@ -85,7 +87,17 @@ Append events to `_journal/pulse.log` during the session. Substantive decisions,
 → to be filed: <kb-path> (when the event will become a kb page)
 ```
 
-Event types: `decision`, `finding`, `concept`, `focus-shift`, `question`.
+Event types: `decision`, `finding`, `concept`, `focus-shift`, `question`, `question-closed`.
+
+`question-closed` events use a slightly different directive — they retire an open question. Format:
+
+```
+## [YYYY-MM-DD HH:MM] question-closed <role>
+<1–2 lines on the resolution>
+→ closes: <verbatim text of the question being closed>
+```
+
+One entry can include multiple `→ closes:` directives if a single decision resolved several questions. The closure text should match the original question's text (matching is case-insensitive and tolerant of trailing punctuation). When `/wrap-up` compacts, retired questions are removed from `pulse.md`'s Open questions section.
 
 Before `/clear` or end of session: invoke `/wrap-up`. The skill compacts the pulse log into `pulse.md`, files pending pages, prompts POR updates if `por` is enabled, and runs lint. `pulse.md` is bounded; lint enforces the line cap.
 

@@ -26,6 +26,7 @@ from common import (
     is_valid_id,
     iter_kb_pages,
     iter_manifest_files,
+    iter_spec_files,
     parse_frontmatter,
 )
 
@@ -138,11 +139,42 @@ def _check_page(path: Path, repo_root: Path) -> list[Finding]:
     return findings
 
 
+def _check_structural_only(path: Path, repo_root: Path) -> list[Finding]:
+    """
+    For files where frontmatter is OPTIONAL (spec planning files): only flag
+    structural issues — malformed YAML, duplicate frontmatter blocks.
+    Doesn't require any specific fields.
+
+    Plain-prose files with no frontmatter are silently passed.
+    """
+    findings: list[Finding] = []
+    rel = str(path.relative_to(repo_root))
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        findings.append(Finding(RULE_ID, SEVERITY, rel, f"could not read file: {e}"))
+        return findings
+
+    # Plain prose without frontmatter — nothing to check
+    if not text.lstrip().startswith("---"):
+        return findings
+
+    try:
+        parse_frontmatter(text)
+    except yaml.YAMLError as e:
+        findings.append(Finding(RULE_ID, SEVERITY, rel, f"malformed frontmatter: {e}", line=1))
+
+    return findings
+
+
 def check(repo_root: Path, config: dict) -> list[Finding]:
-    """Run rule 1 against all kb pages and manifest files."""
+    """Run rule 1 against all kb pages, manifest files, and spec planning files."""
     findings: list[Finding] = []
     for path in iter_kb_pages(repo_root):
         findings.extend(_check_page(path, repo_root))
     for path in iter_manifest_files(repo_root):
         findings.extend(_check_page(path, repo_root))
+    for path in iter_spec_files(repo_root):
+        findings.extend(_check_structural_only(path, repo_root))
     return findings

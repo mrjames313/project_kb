@@ -27,6 +27,7 @@ Don't use `/answer-from-kb` when:
 3. **Read frontmatter blocks of candidate pages.** For each promising hit:
    - Read just the frontmatter (between leading and trailing `---`).
    - Check `status`, `summary`, and `relevant_to` tags.
+   - If `when_to_load` is present, use it to decide whether the body is worth opening for *this* question — the field commonly names a cheaper alternative or scopes the page's task fit. Skip the body when `when_to_load` suggests it.
    - If frontmatter alone answers the question, stop there.
 
 4. **Selectively read bodies.** If frontmatter isn't enough, read the full body of at most 2–3 pages. More than that and you're doing what `/exchange` is for. If you find yourself wanting to read more, stop and recommend `/exchange` instead.

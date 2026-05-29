@@ -23,7 +23,7 @@ If `tasks.md` doesn't exist, run `/plan` first. If the task implicates other are
 3. **Do the work.** Make whatever edits the task requires:
    - **Code changes** — edit files under `areas/<area>/code/`.
    - **Data manifests** — write to `areas/<area>/data/manifests/`.
-   - **New kb pages** — write to `areas/<area>/kb/{findings,decisions,concepts}/`. Use the type templates in `_framework/schema/`.
+   - **New kb pages** — write to `areas/<area>/kb/{findings,decisions,concepts}/`. Use the type templates in `_framework/schema/`. Consider whether the page warrants a `when_to_load` field — fill it in only when there's a useful "don't load" signal (e.g., the page has a cheaper alternative for the common case, or its scope might not be obvious from `summary` + `relevant_to`). Skip the field otherwise; missing is fine.
 
    Stay within the role's write boundaries (see the role file's "Operating boundaries" section). Never modify `raw/` files — they're immutable. Never modify pages outside your area unless `multi_area` is enabled and you're using `/exchange`.
 
@@ -33,7 +33,12 @@ If `tasks.md` doesn't exist, run `/plan` first. If the task implicates other are
    Brief 1–2 line summary of the finding.
    → to be filed: findings/f-YYYY-MM-DD-<slug>
    ```
-   Use the appropriate event type: `decision`, `finding`, `concept`. For mid-task realizations that change focus, use `focus-shift`. For open questions surfaced during work, use `question`.
+   Use the appropriate event type: `decision`, `finding`, `concept`. For mid-task realizations that change focus, use `focus-shift`. For open questions surfaced during work, use `question`. If a `decision` or `finding` you just produced resolves an open question that was already in `pulse.md`, also append a `question-closed` entry with a `→ closes:` directive — don't wait for `/wrap-up` to find it:
+   ```
+   ## [YYYY-MM-DD HH:MM] question-closed <role>
+   Confirmed Rule 152 does not apply — see [[d-...]].
+   → closes: Does Rule 152 apply here?
+   ```
 
 5. **Mark the task done.** In `tasks.md`, flip the checkbox: `- [x] Task description`.
 

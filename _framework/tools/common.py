@@ -103,17 +103,64 @@ def parse_frontmatter(text: str) -> tuple[dict | None, str]:
     Extract YAML frontmatter from the start of a markdown document.
 
     Returns (frontmatter_dict, body). If no frontmatter, returns (None, text).
-    If frontmatter is malformed YAML, raises yaml.YAMLError.
+    If frontmatter is malformed YAML, or if the file contains a duplicate
+    frontmatter block (two `---`-delimited blocks at the top), raises yaml.YAMLError.
     """
     m = _FRONTMATTER_RE.match(text)
     if not m:
         return None, text
     fm_text = m.group(1)
     body = text[m.end():]
+
+    # Detect the duplicate-frontmatter pattern: the first `---`...`---` block
+    # parses cleanly, but the body that follows starts with more YAML-key-like
+    # lines and then another `---` delimiter. That means the author accidentally
+    # produced two frontmatter blocks; the second one is silently lost as
+    # body content.
+    _check_no_duplicate_frontmatter(body)
+
     fm = yaml.safe_load(fm_text)
     if not isinstance(fm, dict):
         raise yaml.YAMLError(f"frontmatter must be a mapping, got {type(fm).__name__}")
     return fm, body
+
+
+_YAML_KEY_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_-]*\s*:")
+
+
+def _check_no_duplicate_frontmatter(body: str) -> None:
+    """
+    Raise yaml.YAMLError if `body` (the content after a first frontmatter block)
+    starts with what looks like a second frontmatter block: 2+ consecutive
+    YAML-key-shaped lines followed by a `---` delimiter, all near the top.
+    """
+    lines = body.split("\n", 30)[:30]
+    # Skip leading blanks
+    i = 0
+    while i < len(lines) and lines[i].strip() == "":
+        i += 1
+
+    yaml_like = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped == "":
+            i += 1
+            continue
+        if stripped == "---":
+            if yaml_like >= 2:
+                raise yaml.YAMLError(
+                    "duplicate frontmatter: the file contains two `---`-delimited "
+                    "blocks at the top. Markdown files may have at most one "
+                    "frontmatter block. Merge into a single block bounded by "
+                    "exactly one pair of `---` delimiters."
+                )
+            return  # `---` reached, but no duplicate pattern; done
+        if _YAML_KEY_RE.match(stripped):
+            yaml_like += 1
+            i += 1
+            continue
+        # Anything else (prose, heading, etc.) — not a duplicate-frontmatter pattern
+        return
 
 
 def read_page(path: Path) -> tuple[dict | None, str, list[str]]:
@@ -169,6 +216,30 @@ def iter_manifest_files(repo_root: Path) -> Iterator[Path]:
         for path in parent.rglob("data/manifests/*.md"):
             if path.is_file():
                 yield path
+
+
+def iter_spec_files(repo_root: Path) -> Iterator[Path]:
+    """
+    Yield spec planning files: brief.md, plan.md, tasks.md, outcome.md
+    under any spec directory at areas/<area>/specs/<spec>/.
+
+    These are prose files where frontmatter is OPTIONAL. They get lighter
+    lint treatment than kb pages (only well-formedness is checked, not
+    required fields).
+    """
+    areas_root = repo_root / "areas"
+    if not areas_root.is_dir():
+        return
+    for specs_dir in areas_root.rglob("specs"):
+        if not specs_dir.is_dir():
+            continue
+        for spec_dir in specs_dir.iterdir():
+            if not spec_dir.is_dir():
+                continue
+            for name in ("brief.md", "plan.md", "tasks.md", "outcome.md"):
+                path = spec_dir / name
+                if path.is_file():
+                    yield path
 
 
 def iter_raw_files(repo_root: Path) -> Iterator[Path]:

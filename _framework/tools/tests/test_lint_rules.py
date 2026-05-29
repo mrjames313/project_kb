@@ -94,6 +94,103 @@ class TestRule01Frontmatter:
         findings = rule_01_frontmatter.check(tmp_path, DEFAULT_CONFIG)
         assert any("does not match convention" in f.message for f in findings)
 
+    def test_duplicate_frontmatter_block_in_kb_page(self, tmp_path: Path) -> None:
+        """Two `---`-delimited blocks at the top of a kb page is flagged."""
+        make_minimal_repo(tmp_path)
+        kb = tmp_path / "areas" / "research" / "kb" / "findings"
+        kb.mkdir(parents=True)
+        (kb / "f-2026-05-dup.md").write_text(
+            "---\n"
+            "id: f-2026-05-dup\n"
+            "title: x\ntype: finding\nstatus: active\narea: research\n"
+            "created: 2026-05-08\nupdated: 2026-05-08\n"
+            "---\n"
+            "id: f-2026-05-dup\n"
+            "title: x\ntype: finding\nstatus: active\narea: research\n"
+            "created: 2026-05-08\nupdated: 2026-05-08\n"
+            "summary: x\n"
+            "---\n\n"
+            "body\n"
+        )
+        findings = rule_01_frontmatter.check(tmp_path, DEFAULT_CONFIG)
+        assert any("duplicate frontmatter" in f.message for f in findings)
+
+    def test_spec_brief_with_duplicate_frontmatter_flagged(self, tmp_path: Path) -> None:
+        """Spec files (brief/plan/tasks/outcome) are scanned with relaxed checks
+        — only structural issues like duplicate frontmatter get flagged."""
+        make_minimal_repo(tmp_path)
+        spec_dir = tmp_path / "areas" / "research" / "specs" / "test-spec"
+        spec_dir.mkdir(parents=True)
+        # Reproduce the user's actual pattern: two `---`-delimited blocks at the top
+        (spec_dir / "brief.md").write_text(
+            "---\n"
+            "id: d-2026-05-test\n"
+            "title: test\ntype: decision\nstatus: active\narea: research\n"
+            "created: 2026-05-26\nupdated: 2026-05-26\n"
+            "---\n"
+            "id: d-2026-05-test\n"
+            "title: test\ntype: decision\nstatus: active\narea: research\n"
+            "created: 2026-05-26\nupdated: 2026-05-26\n"
+            "summary: test summary\n"
+            "---\n\n"
+            "# test\n"
+        )
+        findings = rule_01_frontmatter.check(tmp_path, DEFAULT_CONFIG)
+        # The brief is flagged
+        assert any(
+            "brief.md" in f.file_path and "duplicate frontmatter" in f.message
+            for f in findings
+        )
+
+    def test_spec_brief_pure_prose_no_findings(self, tmp_path: Path) -> None:
+        """Briefs with no frontmatter at all are fine — they're prose by design."""
+        make_minimal_repo(tmp_path)
+        spec_dir = tmp_path / "areas" / "research" / "specs" / "test-spec"
+        spec_dir.mkdir(parents=True)
+        (spec_dir / "brief.md").write_text("# Test\n\nProse only, no frontmatter.\n")
+        (spec_dir / "plan.md").write_text("# Plan\n\nMore prose.\n")
+        (spec_dir / "tasks.md").write_text("# Tasks\n\n- T1\n")
+        (spec_dir / "outcome.md").write_text("# Outcome\n\nFinal prose.\n")
+        findings = rule_01_frontmatter.check(tmp_path, DEFAULT_CONFIG)
+        # No findings about any spec file
+        spec_findings = [f for f in findings if "/specs/" in f.file_path]
+        assert spec_findings == []
+
+    def test_spec_brief_with_valid_frontmatter_no_required_fields_check(self, tmp_path: Path) -> None:
+        """If a spec file has frontmatter, only structural validity is checked
+        — required-field validation is skipped (the spec layer doesn't impose
+        a schema on briefs)."""
+        make_minimal_repo(tmp_path)
+        spec_dir = tmp_path / "areas" / "research" / "specs" / "test-spec"
+        spec_dir.mkdir(parents=True)
+        # Frontmatter present but with no `id`, `type`, etc. — kb pages would
+        # be flagged, but spec files are not.
+        (spec_dir / "brief.md").write_text(
+            "---\n"
+            "spec: test-spec\n"
+            "owner: alice\n"
+            "---\n\n"
+            "# Brief\n\nFreeform frontmatter, structurally valid.\n"
+        )
+        findings = rule_01_frontmatter.check(tmp_path, DEFAULT_CONFIG)
+        spec_findings = [f for f in findings if "brief.md" in f.file_path]
+        assert spec_findings == []
+
+    def test_spec_file_malformed_yaml_flagged(self, tmp_path: Path) -> None:
+        """Even though spec files have no required fields, broken YAML is still flagged."""
+        make_minimal_repo(tmp_path)
+        spec_dir = tmp_path / "areas" / "research" / "specs" / "test-spec"
+        spec_dir.mkdir(parents=True)
+        (spec_dir / "brief.md").write_text(
+            "---\n"
+            "this is: not\n"
+            "  : valid yaml\n"
+            "---\n\n"
+            "body\n"
+        )
+        findings = rule_01_frontmatter.check(tmp_path, DEFAULT_CONFIG)
+        assert any("brief.md" in f.file_path and "malformed" in f.message for f in findings)
+
 
 # --- Rule 2: Forward-link integrity ---
 

@@ -61,6 +61,55 @@ Topical hints used by agents to decide whether a page is worth loading into cont
 
 One sentence (≤25 words). The "index card" version of the page. Agents read this before deciding whether to load the body.
 
+### `when_to_load` (optional)
+
+Task-conditional guidance on whether to load the page body. **Optional.** Where `summary` describes *what the page contains*, `when_to_load` tells the agent *whether a given task makes the body worth the token cost*.
+
+The field exists because `summary` + `relevant_to` answer "is this page about the right topic?" but not "is this page the right artifact for this task?" — two different questions. A page can be on-topic but useless for the current work (the topic is covered better in a cheaper alternative; the page assumes context the current task doesn't share; the page is a synthesis when the task needs primary text). `when_to_load` is the place to surface that.
+
+Format: 1–3 sentences. Lean toward describing the **negative space** — when *not* to load — because the default is "open it" once a wikilink exists. The field's job is to suggest "don't bother."
+
+Good `when_to_load` values share three properties:
+
+1. **Task-conditional, not content-descriptive.** "Read when evaluating a specific Reg D or Reg A+ offering" — describes the reader's task. Bad: "Read when interested in private-placement DD" — that's just `relevant_to` restated.
+2. **Comparative.** Names a cheaper or differently-shaped alternative where applicable. "The underlying findings cover the regulatory mechanics; load this only when you need the playbook spine."
+3. **Specific about what's NOT in the page.** "Doesn't include foreign-asset overlay; for that, load [[f-...-foreign-project-risk-sub-taxonomy]] separately."
+
+Examples:
+
+For a decision page:
+```yaml
+when_to_load: |
+  Read when evaluating a specific Reg D or Reg A+ offering. Skip for general
+  questions about US securities law — the underlying findings cover those.
+```
+
+For a synthesis finding cited by a downstream playbook:
+```yaml
+when_to_load: |
+  Read when building or refining DD process structure. The recommendations
+  are organized by phase; cite specific rows from the playbook rather than
+  re-deriving. Skip if you need only a single recommendation.
+```
+
+For a source page:
+```yaml
+when_to_load: |
+  Read when you need primary-source language — quotes, audit-trail of which
+  enforcement events are cited. Skip if a derivative finding already cites
+  the specific item you need.
+```
+
+For an under_test concept:
+```yaml
+when_to_load: |
+  Read when designing process discipline or evaluating whether to adopt
+  investor-side DD documentation. The concept is unresolved; reading it
+  surfaces the open question, not an answer.
+```
+
+Skip the field when there's no useful "don't load" signal — for short pages where loading is always cheap, for pages whose value is hard to scope task-conditionally, or for sources whose only purpose is to be cited verbatim. Missing `when_to_load` falls back on `summary` + `relevant_to`, which is fine.
+
 ## Type-specific fields
 
 ### `source`
