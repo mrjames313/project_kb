@@ -54,13 +54,20 @@ Once all other areas have weighed in:
 
 The `/promote` skill (auto-invoked on consensus when `formal_review` is on; manually invoked otherwise after human approval) does:
 
-1. Move `_proposed/<slug>/page.md` to `commons/kb/<type>/<id>.md`.
-2. Set frontmatter:
-   - `human_reviewed: false`
-   - `promoted_from: areas/<x>`
+1. Generate a new commons id using the `<prefix>-commons-<slug>` convention (source date dropped). E.g., `f-2026-05-shot-noise` → `f-commons-shot-noise`. This is the same convention used by the commons-extension pathway (see `commons-extension-protocol.md`), so both pathways produce consistent ids in commons.
+2. Move `_proposed/<slug>/page.md` to `commons/kb/<type>/<new-commons-id>.md`.
+3. Set frontmatter:
+   - `id: <new-commons-id>` (the page's new id, not the source's)
+   - `human_reviewed: false` (proposal-pathway pages need a reviewer's ack; this is the meaningful difference from commons-extension's `human_reviewed: true` which means user confirmed inline)
+   - `promoted_from_page: <source-id>` (the original area page id, for audit trail)
+   - `promoted_from_area: areas/<x>`
    - `promoted_on: <date>`
-3. Write a `CHANGELOG.md` entry.
-4. File an INBOX entry under "Awaiting your ack": "Promoted [[finding]] — awaiting human review."
+   - `promotion_path: proposal-and-promote` (distinguishes from `commons-extension` so the two pathways are auditable separately)
+4. Leave the source area page completely unchanged. Per the source area's `/propose-promotion` discipline, the area copy stays in place; the new commons page coexists with it under a distinct id.
+5. Write a `CHANGELOG.md` entry (citing the new commons id).
+6. File an INBOX entry under "Awaiting your ack": "Promoted [[finding]] — awaiting human review."
+
+Lint Rule 18 enforces project-wide id uniqueness, so a faulty implementation that retained the source id would fail lint immediately.
 
 ## Human acknowledgment
 

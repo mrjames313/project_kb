@@ -6,5 +6,3 @@ _Last regenerated: 2026-05-29_
 ## commons/
 
 _(commons brief not yet populated)_
-
-#### areas/test/

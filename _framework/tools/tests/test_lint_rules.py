@@ -20,6 +20,7 @@ from lint_rules import (
     rule_07_pulse_size,
     rule_12_manifest,
     rule_15_index,
+    rule_18_id_uniqueness,
 )
 
 from lint_helpers import make_minimal_repo, write_kb_page
@@ -519,3 +520,97 @@ class TestRule15Index:
         assert "Concepts under test" in content
         assert "f-2026-05-shot-noise" in content
         assert "c-2026-05-ut1" in content
+
+
+# --- Rule 18: ID uniqueness across the project ---
+
+class TestRule18IdUniqueness:
+    def test_unique_ids_pass(self, tmp_path: Path) -> None:
+        make_minimal_repo(tmp_path)
+        write_kb_page(tmp_path, "areas/research", "finding", "alpha")
+        write_kb_page(tmp_path, "areas/research", "finding", "beta")
+        write_kb_page(tmp_path, "areas/business-model", "finding", "gamma")
+        findings = rule_18_id_uniqueness.check(tmp_path, DEFAULT_CONFIG)
+        assert findings == []
+
+    def test_same_id_in_two_areas_flagged(self, tmp_path: Path) -> None:
+        """Two pages with the same id in different areas — the bug shape."""
+        make_minimal_repo(tmp_path)
+        write_kb_page(tmp_path, "areas/research", "finding", "shared-slug")
+        write_kb_page(tmp_path, "areas/business-model", "finding", "shared-slug")
+        findings = rule_18_id_uniqueness.check(tmp_path, DEFAULT_CONFIG)
+        # Each colliding file produces a finding so the user sees the issue
+        # from either entry point
+        assert len(findings) == 2
+        # Both findings mention the duplicated id
+        for f in findings:
+            assert "f-2026-05-shared-slug" in f.message
+            assert "2 pages" in f.message
+
+    def test_area_and_commons_id_collision_flagged(self, tmp_path: Path) -> None:
+        """The specific bug shape: source area page + commons page sharing id."""
+        make_minimal_repo(tmp_path)
+        # Area page (the source of a promotion that incorrectly kept its id)
+        write_kb_page(tmp_path, "areas/research", "finding", "shot-noise")
+        # Commons page with the same id (what the buggy /promote produced)
+        commons_dir = tmp_path / "commons" / "kb" / "findings"
+        commons_dir.mkdir(parents=True, exist_ok=True)
+        (commons_dir / "f-2026-05-shot-noise.md").write_text(
+            "---\n"
+            "id: f-2026-05-shot-noise\n"
+            "title: x\ntype: finding\nstatus: active\narea: commons\n"
+            "created: 2026-05-08\nupdated: 2026-05-08\n"
+            "summary: x\n"
+            "provenance:\n  kind: external\n  ref: x\n  raw_path: '~'\n"
+            "evidence: [x]\nconfidence: high\n"
+            "---\n\nBody.\n"
+        )
+        findings = rule_18_id_uniqueness.check(tmp_path, DEFAULT_CONFIG)
+        assert len(findings) == 2
+        # The suggestion points at the commons rename convention
+        for f in findings:
+            assert "commons-" in f.suggestion
+
+    def test_correctly_promoted_pages_pass(self, tmp_path: Path) -> None:
+        """Area + commons with distinct ids (the fix's expected state) is clean."""
+        make_minimal_repo(tmp_path)
+        # Area source page
+        write_kb_page(tmp_path, "areas/research", "finding", "shot-noise")
+        # Commons page using the new commons-id convention
+        commons_dir = tmp_path / "commons" / "kb" / "findings"
+        commons_dir.mkdir(parents=True, exist_ok=True)
+        (commons_dir / "f-commons-shot-noise.md").write_text(
+            "---\n"
+            "id: f-commons-shot-noise\n"
+            "title: x\ntype: finding\nstatus: active\narea: commons\n"
+            "created: 2026-05-08\nupdated: 2026-05-08\n"
+            "summary: x\n"
+            "provenance:\n  kind: external\n  ref: x\n  raw_path: '~'\n"
+            "evidence: [x]\nconfidence: high\n"
+            "---\n\nBody.\n"
+        )
+        findings = rule_18_id_uniqueness.check(tmp_path, DEFAULT_CONFIG)
+        assert findings == []
+
+    def test_three_way_collision(self, tmp_path: Path) -> None:
+        """A 3+ way collision is reported on every involved file."""
+        make_minimal_repo(tmp_path)
+        write_kb_page(tmp_path, "areas/research", "finding", "x")
+        write_kb_page(tmp_path, "areas/business-model", "finding", "x")
+        write_kb_page(tmp_path, "areas/frontend", "finding", "x")
+        findings = rule_18_id_uniqueness.check(tmp_path, DEFAULT_CONFIG)
+        assert len(findings) == 3
+        for f in findings:
+            assert "3 pages" in f.message
+
+    def test_missing_id_field_ignored(self, tmp_path: Path) -> None:
+        """A page missing an id is Rule 1's problem, not Rule 18's."""
+        make_minimal_repo(tmp_path)
+        # Two pages, both missing id — should not be flagged as collisions
+        # (they're flagged by Rule 1 separately)
+        for name in ("a", "b"):
+            path = tmp_path / "areas/research/kb/findings" / f"f-2026-05-{name}.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("---\ntitle: x\ntype: finding\n---\n\nBody.\n")
+        findings = rule_18_id_uniqueness.check(tmp_path, DEFAULT_CONFIG)
+        assert findings == []

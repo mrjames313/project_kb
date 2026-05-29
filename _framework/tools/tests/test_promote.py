@@ -62,9 +62,12 @@ class TestPromote:
         _write_proposal(tmp_path, "2026-05-shot-noise", "finding", "f-2026-05-shot-noise")
         result = promote("2026-05-shot-noise", tmp_path)
 
-        target = tmp_path / "commons" / "kb" / "findings" / "f-2026-05-shot-noise.md"
+        # Target file uses the new commons-id form (date dropped)
+        target = tmp_path / "commons" / "kb" / "findings" / "f-commons-shot-noise.md"
         assert target.is_file()
-        assert result.moved_to == "commons/kb/findings/f-2026-05-shot-noise.md"
+        assert result.moved_to == "commons/kb/findings/f-commons-shot-noise.md"
+        assert result.source_page_id == "f-2026-05-shot-noise"
+        assert result.new_commons_id == "f-commons-shot-noise"
         # Original page.md should be gone
         assert not (tmp_path / "commons" / "_proposed" / "2026-05-shot-noise" / "page.md").exists()
         # Other files in the proposal dir remain
@@ -75,11 +78,15 @@ class TestPromote:
         _write_proposal(tmp_path, "test-slug", "finding", "f-2026-05-test")
         promote("test-slug", tmp_path)
 
-        target = tmp_path / "commons" / "kb" / "findings" / "f-2026-05-test.md"
+        target = tmp_path / "commons" / "kb" / "findings" / "f-commons-test.md"
         content = target.read_text()
+        # Aligned with commons-extension's frontmatter shape
+        assert "id: f-commons-test" in content
         assert "area: commons" in content
         assert "human_reviewed: false" in content
-        assert "promoted_from: research" in content
+        assert "promoted_from_page: f-2026-05-test" in content
+        assert "promoted_from_area: research" in content
+        assert "promotion_path: proposal-and-promote" in content
         assert f"promoted_on: {date.today().isoformat()}" in content
 
     def test_preserves_body(self, tmp_path: Path) -> None:
@@ -87,7 +94,7 @@ class TestPromote:
         _write_proposal(tmp_path, "test-slug", "finding", "f-2026-05-test")
         promote("test-slug", tmp_path)
 
-        target = tmp_path / "commons" / "kb" / "findings" / "f-2026-05-test.md"
+        target = tmp_path / "commons" / "kb" / "findings" / "f-commons-test.md"
         content = target.read_text()
         assert "Body of the finding." in content
 
@@ -102,10 +109,10 @@ class TestPromote:
 
         content = changelog.read_text()
         assert "promoted finding" in content
-        assert "[[f-2026-05-test]]" in content
+        # CHANGELOG cites the new commons id, not the source
+        assert "[[f-commons-test]]" in content
         assert "From: research" in content
         # Placeholder should be gone (or at least the new entry should be near the top)
-        # New entry should appear before any old "_No promotions yet._"
         new_pos = content.find("promoted finding")
         placeholder_pos = content.find("_No promotions yet._")
         if placeholder_pos != -1:
@@ -115,8 +122,8 @@ class TestPromote:
         make_minimal_repo(tmp_path)
         _write_proposal(tmp_path, "decision-slug", "decision", "d-2026-05-test")
         result = promote("decision-slug", tmp_path)
-        assert result.moved_to == "commons/kb/decisions/d-2026-05-test.md"
-        assert (tmp_path / "commons" / "kb" / "decisions" / "d-2026-05-test.md").is_file()
+        assert result.moved_to == "commons/kb/decisions/d-commons-test.md"
+        assert (tmp_path / "commons" / "kb" / "decisions" / "d-commons-test.md").is_file()
 
     def test_concept_goes_to_concepts_dir(self, tmp_path: Path) -> None:
         make_minimal_repo(tmp_path)
@@ -145,7 +152,7 @@ class TestPromote:
             "---\nproposing_area: research\nproposed_on: 2026-05-08\n---\n\nProposal.\n"
         )
         result = promote("concept-slug", tmp_path)
-        assert result.moved_to == "commons/kb/concepts/c-2026-05-test.md"
+        assert result.moved_to == "commons/kb/concepts/c-commons-test.md"
 
     def test_missing_proposal_raises(self, tmp_path: Path) -> None:
         make_minimal_repo(tmp_path)
@@ -155,10 +162,10 @@ class TestPromote:
     def test_target_exists_raises(self, tmp_path: Path) -> None:
         make_minimal_repo(tmp_path)
         _write_proposal(tmp_path, "test-slug", "finding", "f-2026-05-test")
-        # Pre-create the target
+        # Pre-create the target — must use the new commons id form
         target_dir = tmp_path / "commons" / "kb" / "findings"
         target_dir.mkdir(parents=True, exist_ok=True)
-        (target_dir / "f-2026-05-test.md").write_text("existing")
+        (target_dir / "f-commons-test.md").write_text("existing")
         with pytest.raises(PromoteError) as exc_info:
             promote("test-slug", tmp_path)
         assert "already exists" in str(exc_info.value)

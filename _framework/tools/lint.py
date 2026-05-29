@@ -46,6 +46,7 @@ INSPECTION_RULES = [
     "rule_07_pulse_size",
     "rule_12_manifest",
     "rule_17_raw_immutability",
+    "rule_18_id_uniqueness",
 ]
 
 ALL_RULES = FIXUP_RULES + INSPECTION_RULES

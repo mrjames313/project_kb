@@ -150,6 +150,19 @@ Lifecycle:
 - `dropped` — abandoned without resolution.
 - `superseded` — replaced; follow `superseded_by`.
 
+#### Body shape for `under_test` and later
+
+When a concept reaches `under_test`, the body should make the test legible. A useful pattern — not a required form — is to cover, in roughly this order:
+
+- **What we're testing** — the claim, stated precisely enough that a reader can recognize evidence for or against it.
+- **Why this is a concept, not a finding** — the gap that keeps it from being established (single-source, source-asymmetry, interested-party reliance, etc.). Make the gap concrete so a reader can validate it.
+- **Why the idea is worth tracking** — second-order rationales that justify the cost of carrying an unresolved hypothesis.
+- **How to test it** — at minimum an *observable* (what evidence would bear on the claim) and a *disconfirmer* (what would falsify it). Without these two, the concept will drift in `under_test` indefinitely.
+- **Promotion criteria** — what specifically would move this to `supported`. Name the kind of evidence or source that would close the gap.
+- **If falsified** — what specifically would move this to `falsified`, and what artifacts (decision pages, playbooks) would need updating if so.
+
+The point isn't form-filling. The point is that an `under_test` concept without an articulated test and a falsification condition is indistinguishable from a `developing` one — and the framework has no way to recover its status without re-reading the originating conversation. Concepts at `seed` or `developing` don't need this structure; one paragraph is fine.
+
 ### `finding`
 
 ```yaml

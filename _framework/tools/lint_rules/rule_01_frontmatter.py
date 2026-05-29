@@ -132,7 +132,7 @@ def _check_page(path: Path, repo_root: Path) -> list[Finding]:
                     rel,
                     f"id {page_id!r} does not match convention for type {page_type!r}",
                     line=1,
-                    suggestion=f"expected pattern: <prefix>-YYYY-MM[-DD]-<slug>",
+                    suggestion=f"expected pattern: <prefix>-YYYY-MM[-DD]-<slug> or <prefix>-commons-<slug>",
                 )
             )
 

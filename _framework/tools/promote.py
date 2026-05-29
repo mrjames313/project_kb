@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from common import (  # noqa: E402
     VALID_TYPES,
     find_repo_root,
+    new_commons_id,
     parse_frontmatter,
 )
 
@@ -46,7 +47,8 @@ class PromoteResult:
     slug: str
     moved_from: str
     moved_to: str
-    page_id: str
+    source_page_id: str  # original id from the area kb (and proposal stage)
+    new_commons_id: str  # new id at commons/kb/, generated via new_commons_id()
     page_type: str
     promoted_from_area: str
     changelog_updated: bool
@@ -89,10 +91,22 @@ def _read_proposal_metadata(proposed_dir: Path) -> dict:
     return fm or {}
 
 
+class _NoAliasDumper(yaml.SafeDumper):
+    """SafeDumper variant that disables anchors/aliases so equal-valued dates
+    serialize as plain values rather than `&id001 / *id001` references —
+    keeps frontmatter human-readable."""
+    def ignore_aliases(self, data):
+        return True
+
+
 def _emit_frontmatter(fm: dict) -> str:
     """Serialize a frontmatter dict back to YAML with `---` delimiters."""
-    # Use safe_dump with sort_keys=False to preserve order best-effort
-    body = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True).rstrip()
+    body = yaml.dump(
+        fm,
+        sort_keys=False,
+        allow_unicode=True,
+        Dumper=_NoAliasDumper,
+    ).rstrip()
     return f"---\n{body}\n---\n"
 
 
@@ -161,11 +175,15 @@ def promote(slug: str, repo_root: Path) -> PromoteResult:
     if not page_id:
         raise PromoteError("proposal page is missing `id`")
 
-    # Determine target path
+    # Generate the new commons id (distinct from the source area's id, so the
+    # source area page can stay in place without an id collision).
+    new_id = new_commons_id(page_id)
+
+    # Determine target path under commons/kb/<type>/
     type_dir = _TYPE_DIR.get(page_type)
     if type_dir is None:
         raise PromoteError(f"no commons/kb subdir for type {page_type!r}")
-    target_path = repo_root / "commons" / "kb" / type_dir / f"{page_id}.md"
+    target_path = repo_root / "commons" / "kb" / type_dir / f"{new_id}.md"
     if target_path.exists():
         raise PromoteError(f"target already exists: {target_path}")
 
@@ -173,12 +191,19 @@ def promote(slug: str, repo_root: Path) -> PromoteResult:
     proposal_fm = _read_proposal_metadata(proposed_dir)
     source_area = proposal_fm.get("proposing_area") or fm.get("area") or "unknown"
 
-    # Update frontmatter for promotion
+    # Update frontmatter for promotion. Aligned with commons-extension's shape
+    # so both promotion pathways produce consistent frontmatter; differs in
+    # `promotion_path` and `human_reviewed` (proposal pathway pages need a
+    # reviewer; commons-extension pages were user-confirmed inline).
+    today = date.today()
+    fm["id"] = new_id
     fm["area"] = "commons"
     fm["human_reviewed"] = False
-    fm["promoted_from"] = source_area
-    fm["promoted_on"] = date.today()
-    fm["updated"] = date.today()
+    fm["promoted_from_page"] = page_id  # original source id
+    fm["promoted_from_area"] = source_area
+    fm["promoted_on"] = today
+    fm["promotion_path"] = "proposal-and-promote"
+    fm["updated"] = today
 
     # Write the new file
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -194,14 +219,15 @@ def promote(slug: str, repo_root: Path) -> PromoteResult:
         # but should be reported.
         raise PromoteError(f"copied page but could not remove source: {e}") from e
 
-    # Append to CHANGELOG
-    changelog_ok = _append_changelog_entry(repo_root, page_id, page_type, source_area)
+    # Append to CHANGELOG (uses the new commons id, not the source id)
+    changelog_ok = _append_changelog_entry(repo_root, new_id, page_type, source_area)
 
     return PromoteResult(
         slug=slug,
         moved_from=str(page_md.relative_to(repo_root)),
         moved_to=str(target_path.relative_to(repo_root)),
-        page_id=page_id,
+        source_page_id=page_id,
+        new_commons_id=new_id,
         page_type=page_type,
         promoted_from_area=source_area,
         changelog_updated=changelog_ok,
@@ -230,7 +256,7 @@ def main() -> int:
         print(f"promote: {e}", file=sys.stderr)
         return 1
 
-    print(f"Promoted {result.page_type} [[{result.page_id}]]")
+    print(f"Promoted {result.page_type} from [[{result.source_page_id}]] → [[{result.new_commons_id}]]")
     print(f"  from: {result.moved_from}")
     print(f"  to:   {result.moved_to}")
     print(f"  source area: {result.promoted_from_area}")

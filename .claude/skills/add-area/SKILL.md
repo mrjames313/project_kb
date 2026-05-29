@@ -102,7 +102,68 @@ Don't add an area for:
    ```
    Create the corresponding decision page documenting why the area was created and what scope it covers.
 
-9. **Brief the user.** Tell them the area is ready and what to do next: `/start <role-name>` to adopt the new role, then `/plan` to scope the first piece of work.
+9. **Commons extension review (default on).** Skip this step if the user passed `--no-extend-commons` to `/add-area`, OR if this is the project's first area (commons-extension is a no-op when there's nothing to extend from). Otherwise:
+
+   The point: when a new area is added, kb pages in existing areas may become more useful in commons (visible to all areas) than they were in their original area. Catch those moments instead of leaving them for later.
+
+   Workflow:
+
+   a. **Enumerate candidates.** Run:
+      ```
+      python _framework/tools/commons_extension.py list --new-area <new-area-name>
+      ```
+      The tool returns structured JSON with `context` (project framing) and `candidates` (kb pages eligible for extension — findings, decisions, concepts; not sources; not statuses superseded/falsified/dropped/archived).
+
+   b. **Display the context.** Show the project framing before the per-candidate review:
+      ```
+      The project now has N areas; commons holds M pages. Commons-extension on
+      the project's 2nd area typically surfaces the most candidates — later
+      area additions should usually find less to extend. K candidates surfaced.
+      ```
+      This calibrates the user's expectations for how many candidates to expect.
+
+   c. **Filter candidates by semantic relevance.** For each candidate the tool returned, read its `summary`, `when_to_load` (if present), and `relevant_to` tags. Compare against the new area's brief. Surface only candidates that would plausibly be useful to the new area. Skip candidates whose `when_to_load` makes clear they're scoped narrower than the new area's domain. Use judgment — not all returned candidates need to be presented to the user.
+
+   d. **For each surfaced candidate, present and ask.** Display the candidate's metadata to the user:
+      ```
+      Candidate: <page-id>
+      Currently: <source-path>
+      Summary:   <summary>
+      when_to_load: <verbatim, or "(none specified)" if absent>
+      Why surfaced: <one-line rationale citing the brief signal that matched>
+
+      Extend commons with this? [y/n/skip]
+      ```
+      `skip` means defer with no commitment; the page stays where it is.
+
+   e. **For each `y` confirmation, decide refine-vs-copy.** Read the source page's body. Decide whether it's already in suitably general framing or if it needs refinement for commons (e.g., the body uses area-specific language that would read awkwardly when invoked by a different area). If the source is already general, copy as-is. If it needs refinement, rewrite the body for general framing — keeping the substantive content intact, only adjusting the language.
+
+      Then apply:
+      ```
+      # Copy as-is:
+      python _framework/tools/commons_extension.py apply \
+          --source-id <page-id> \
+          --new-area <new-area-name>
+
+      # Or with refinement (write refined body to a temp file first):
+      python _framework/tools/commons_extension.py apply \
+          --source-id <page-id> \
+          --new-area <new-area-name> \
+          --refined-body-file /tmp/refined-body.md
+      ```
+      The tool creates the new commons page with id of the form `<type-prefix>-commons-<slug>` (the source's date is dropped), updates `commons/CHANGELOG.md`, and leaves the source area page completely unchanged.
+
+   f. **After all confirmed extensions, run lint.** Verify references still resolve (wikilinks pointing at the source ids continue to work because the source pages are still in place; the new commons pages have new ids).
+
+   g. **Journal the extensions** in `commons/_journal/pulse.log`:
+      ```
+      ## [YYYY-MM-DD HH:MM] decision <role>
+      Extended commons during /add-area <new-area-name>: <N> pages from <source-areas>.
+      ```
+
+   The source area pages are intentionally left untouched. Wikilinks from elsewhere can either continue pointing at the area-local versions (for context-specific framing) or be updated to point at the commons versions (for canonical references) — that's a per-link judgment made later, not here.
+
+10. **Brief the user.** Tell them the area is ready and what to do next: `/start <role-name>` to adopt the new role, then `/plan` to scope the first piece of work. If commons extension created any new commons pages, mention them briefly.
 
 ## Notes
 
